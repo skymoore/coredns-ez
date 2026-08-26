@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -139,6 +140,7 @@ func newAdmin(cfg coreConfig) (*Admin, error) {
 		_ = db.UpsertOIDC(store.OIDCConfig{
 			Issuer: cfg.OIDC.Issuer, ClientID: cfg.OIDC.ClientID,
 			ClientSecret: cfg.OIDC.ClientSecret, RedirectURL: cfg.OIDC.RedirectURL,
+			ButtonText: cfg.OIDC.ButtonText, ButtonImage: cfg.OIDC.ButtonImage,
 		})
 	}
 
@@ -147,7 +149,15 @@ func newAdmin(cfg coreConfig) (*Admin, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	if n == 0 && cfg.Role == rolePrimary {
+	if !cfg.Password {
+		if cfg.OIDC == nil {
+			if _, err := db.GetOIDC(); err != nil {
+				_ = db.Close()
+				return nil, fmt.Errorf("password off requires oidc")
+			}
+		}
+	}
+	if n == 0 && cfg.Role == rolePrimary && cfg.Password {
 		pass := os.Getenv("COREDNS_ADMIN_BOOTSTRAP_PASSWORD")
 		if pass == "" {
 			pass = os.Getenv("COREDNS_API_BOOTSTRAP_PASSWORD")
@@ -226,11 +236,25 @@ func (a *Admin) sameConfig(cfg coreConfig) error {
 	if cfg.Role != "" && cfg.Role != a.cfg.Role {
 		return fmt.Errorf("conflicting role")
 	}
+	if cfg.passwordSet && a.cfg.passwordSet && cfg.Password != a.cfg.Password {
+		return fmt.Errorf("conflicting password setting")
+	}
 	return nil
 }
 
+func parseOnOff(s string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "on", "true", "yes", "1":
+		return true, nil
+	case "off", "false", "no", "0":
+		return false, nil
+	default:
+		return false, fmt.Errorf("want on or off")
+	}
+}
+
 func parseAdmin(c *caddy.Controller) (coreConfig, bool, error) {
-	cfg := coreConfig{}
+	cfg := coreConfig{Password: true}
 	if !c.Next() {
 		return cfg, true, c.ArgErr()
 	}
@@ -287,28 +311,20 @@ func parseAdmin(c *caddy.Controller) (coreConfig, bool, error) {
 			cfg.PrimaryDNS = hp
 		case "cors":
 			cfg.CORS = c.RemainingArgs()
-		case "oidc":
-			oc := &oidcSettings{}
-			for c.NextBlock() {
-				key := c.Val()
-				if !c.NextArg() {
-					return cfg, false, c.ArgErr()
-				}
-				switch key {
-				case "issuer":
-					oc.Issuer = c.Val()
-				case "client_id":
-					oc.ClientID = c.Val()
-				case "client_secret":
-					oc.ClientSecret = c.Val()
-				case "redirect_url":
-					oc.RedirectURL = c.Val()
-				default:
-					return cfg, false, c.Errf("unknown oidc property %q", key)
-				}
+		case "password":
+			if !c.NextArg() {
+				return cfg, false, c.ArgErr()
 			}
-			if oc.Issuer == "" || oc.ClientID == "" || oc.ClientSecret == "" || oc.RedirectURL == "" {
-				return cfg, false, c.Err("oidc requires issuer, client_id, client_secret, redirect_url")
+			on, err := parseOnOff(c.Val())
+			if err != nil {
+				return cfg, false, c.Errf("password: %v", err)
+			}
+			cfg.Password = on
+			cfg.passwordSet = true
+		case "oidc":
+			oc, err := parseOIDC(c)
+			if err != nil {
+				return cfg, false, err
 			}
 			cfg.OIDC = oc
 		default:

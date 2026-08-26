@@ -30,7 +30,7 @@ func testAdmin(t *testing.T) *Admin {
 		t.Fatal(err)
 	}
 	a := &Admin{
-		cfg:       coreConfig{Role: rolePrimary, Data: dir, DB: filepath.Join(dir, "api.sqlite")},
+		cfg:       coreConfig{Role: rolePrimary, Data: dir, DB: filepath.Join(dir, "api.sqlite"), Password: true},
 		db:        st,
 		primaries: map[string]*dnsupdatepersist.UpdatePersist{},
 		views:     map[string]map[string]*dnsupdatepersist.UpdatePersist{},
@@ -218,6 +218,49 @@ func loginToken(t *testing.T, a *Admin) string {
 		t.Fatalf("token: %v %s", err, w.Body.Bytes())
 	}
 	return tok.Token
+}
+
+func TestAuthConfigAndPasswordOff(t *testing.T) {
+	a := testAdmin(t)
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/auth/config", nil)
+	w := httptest.NewRecorder()
+	a.mux.ServeHTTP(w, r)
+	if w.Code != http.StatusOK || !bytes.Contains(w.Body.Bytes(), []byte(`"password":true`)) {
+		t.Fatalf("default config: %d %s", w.Code, w.Body.Bytes())
+	}
+
+	a.cfg.Password = false
+	r = httptest.NewRequest(http.MethodGet, "/api/v1/auth/config", nil)
+	w = httptest.NewRecorder()
+	a.mux.ServeHTTP(w, r)
+	if w.Code != http.StatusOK || !bytes.Contains(w.Body.Bytes(), []byte(`"password":false`)) {
+		t.Fatalf("password off config: %d %s", w.Code, w.Body.Bytes())
+	}
+
+	body, _ := json.Marshal(map[string]string{"username": "admin", "password": "secret"})
+	r = httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(body))
+	w = httptest.NewRecorder()
+	a.mux.ServeHTTP(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("password login when disabled: %d %s", w.Code, w.Body.Bytes())
+	}
+
+	a.cfg.OIDC = &oidcSettings{
+		Issuer:      "https://idp.example.com",
+		ButtonText:  "Sign in with IdP",
+		ButtonImage: "https://idp.example.com/logo.svg",
+	}
+	r = httptest.NewRequest(http.MethodGet, "/api/v1/auth/config", nil)
+	w = httptest.NewRecorder()
+	a.mux.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("oidc config: %d %s", w.Code, w.Body.Bytes())
+	}
+	if !bytes.Contains(w.Body.Bytes(), []byte(`"oidc":true`)) ||
+		!bytes.Contains(w.Body.Bytes(), []byte(`"oidc_button_text":"Sign in with IdP"`)) ||
+		!bytes.Contains(w.Body.Bytes(), []byte(`"oidc_button_image":"https://idp.example.com/logo.svg"`)) {
+		t.Fatalf("oidc button fields: %s", w.Body.Bytes())
+	}
 }
 
 func TestSPAAndJSONIndex(t *testing.T) {

@@ -40,17 +40,22 @@ admin {
     join URL TOKEN
     dns HOST:PORT
     cors ORIGIN...
+    password on | off
     oidc {
         issuer URL
         client_id ID
         client_secret SECRET
         redirect_url URL
+        button_text TEXT
+        button_image URL
     }
 }
 ~~~
 
 * `db` / `data` / `role` are required on the first *admin* block.
-* `bootstrap_admin` plus env `COREDNS_ADMIN_BOOTSTRAP_PASSWORD` seed the first admin on an empty DB.
+* `password` defaults to `on`. `password off` hides password login (OIDC button only); OIDC is then required, and the first OIDC sign-in becomes admin (no bootstrap user).
+* `oidc` `button_text` and `button_image` (http or https URL) customize the login button. Default label is `Continue with OIDC`.
+* `bootstrap_admin` plus env `COREDNS_ADMIN_BOOTSTRAP_PASSWORD` seed the first admin on an empty DB when password login is on.
 * `advertise` is the DNS address secondaries transfer from.
 * `join` is secondary-only, used when the DB has no cluster membership yet.
 * `dns` is the primary’s DNS address on a secondary (`HOST:PORT`).

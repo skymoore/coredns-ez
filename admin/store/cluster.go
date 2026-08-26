@@ -39,6 +39,8 @@ type OIDCConfig struct {
 	ClientID     string `json:"client_id"`
 	ClientSecret string `json:"client_secret,omitempty"`
 	RedirectURL  string `json:"redirect_url"`
+	ButtonText   string `json:"button_text,omitempty"`
+	ButtonImage  string `json:"button_image,omitempty"`
 }
 
 type Snapshot struct {
@@ -243,16 +245,16 @@ func (s *Store) DeleteZone(origin string) error {
 func (s *Store) UpsertOIDC(c OIDCConfig) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, err := s.db.Exec(`INSERT INTO oidc_config(id, issuer, client_id, client_secret, redirect_url) VALUES(1,?,?,?,?)
-		ON CONFLICT(id) DO UPDATE SET issuer=excluded.issuer, client_id=excluded.client_id, client_secret=excluded.client_secret, redirect_url=excluded.redirect_url`,
-		c.Issuer, c.ClientID, c.ClientSecret, c.RedirectURL)
+	_, err := s.db.Exec(`INSERT INTO oidc_config(id, issuer, client_id, client_secret, redirect_url, button_text, button_image) VALUES(1,?,?,?,?,?,?)
+		ON CONFLICT(id) DO UPDATE SET issuer=excluded.issuer, client_id=excluded.client_id, client_secret=excluded.client_secret, redirect_url=excluded.redirect_url, button_text=excluded.button_text, button_image=excluded.button_image`,
+		c.Issuer, c.ClientID, c.ClientSecret, c.RedirectURL, c.ButtonText, c.ButtonImage)
 	return err
 }
 
 func (s *Store) GetOIDC() (OIDCConfig, error) {
 	var c OIDCConfig
-	err := s.db.QueryRow(`SELECT issuer, client_id, client_secret, redirect_url FROM oidc_config WHERE id = 1`).
-		Scan(&c.Issuer, &c.ClientID, &c.ClientSecret, &c.RedirectURL)
+	err := s.db.QueryRow(`SELECT issuer, client_id, client_secret, redirect_url, button_text, button_image FROM oidc_config WHERE id = 1`).
+		Scan(&c.Issuer, &c.ClientID, &c.ClientSecret, &c.RedirectURL, &c.ButtonText, &c.ButtonImage)
 	return c, err
 }
 
@@ -347,9 +349,9 @@ func (s *Store) ApplySnapshot(snap Snapshot) error {
 		}
 	}
 	if snap.OIDC != nil {
-		if _, err := tx.Exec(`INSERT INTO oidc_config(id, issuer, client_id, client_secret, redirect_url) VALUES(1,?,?,?,?)
-			ON CONFLICT(id) DO UPDATE SET issuer=excluded.issuer, client_id=excluded.client_id, client_secret=excluded.client_secret, redirect_url=excluded.redirect_url`,
-			snap.OIDC.Issuer, snap.OIDC.ClientID, snap.OIDC.ClientSecret, snap.OIDC.RedirectURL); err != nil {
+		if _, err := tx.Exec(`INSERT INTO oidc_config(id, issuer, client_id, client_secret, redirect_url, button_text, button_image) VALUES(1,?,?,?,?,?,?)
+			ON CONFLICT(id) DO UPDATE SET issuer=excluded.issuer, client_id=excluded.client_id, client_secret=excluded.client_secret, redirect_url=excluded.redirect_url, button_text=excluded.button_text, button_image=excluded.button_image`,
+			snap.OIDC.Issuer, snap.OIDC.ClientID, snap.OIDC.ClientSecret, snap.OIDC.RedirectURL, snap.OIDC.ButtonText, snap.OIDC.ButtonImage); err != nil {
 			return err
 		}
 	}

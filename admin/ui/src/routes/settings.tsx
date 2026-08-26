@@ -18,7 +18,7 @@ export function SettingsPage({ me }: { me: Actor }) {
     ["Cluster", n?.cluster_id || "none"],
     ["Advertise DNS", n?.advertise_dns || ""],
     ["Snapshot generation", n ? String(n.generation) : ""],
-    ["Password login", cfg.data?.password ? "enabled" : ""],
+    ["Password login", cfg.data == null ? "" : cfg.data.password ? "enabled" : "disabled"],
     ["OIDC", cfg.data?.oidc ? cfg.data.oidc_issuer ?? "enabled" : "off"],
   ];
   return (

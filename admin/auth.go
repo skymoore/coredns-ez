@@ -129,6 +129,10 @@ func requireRole(need string, next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (a *Admin) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if !a.cfg.Password {
+		writeError(w, http.StatusForbidden, "password login disabled")
+		return
+	}
 	var body struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
@@ -170,16 +174,40 @@ func (a *Admin) handleMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, actorFrom(r))
 }
 
+const defaultOIDCButton = "Continue with OIDC"
+
 func (a *Admin) handleAuthConfig(w http.ResponseWriter, _ *http.Request) {
-	_, err := a.db.GetOIDC()
-	writeJSON(w, http.StatusOK, map[string]any{
-		"password": true,
-		"oidc":     err == nil,
-		"oidc_issuer": func() string {
-			if c, e := a.db.GetOIDC(); e == nil {
-				return c.Issuer
-			}
-			return ""
-		}(),
-	})
+	dbOIDC, dbErr := a.db.GetOIDC()
+	oidcOn := dbErr == nil || a.cfg.OIDC != nil
+	issuer := ""
+	text := defaultOIDCButton
+	image := ""
+	if dbErr == nil {
+		issuer = dbOIDC.Issuer
+		if dbOIDC.ButtonText != "" {
+			text = dbOIDC.ButtonText
+		}
+		image = dbOIDC.ButtonImage
+	}
+	if a.cfg.OIDC != nil {
+		issuer = a.cfg.OIDC.Issuer
+		if a.cfg.OIDC.ButtonText != "" {
+			text = a.cfg.OIDC.ButtonText
+		}
+		if a.cfg.OIDC.ButtonImage != "" {
+			image = a.cfg.OIDC.ButtonImage
+		}
+	}
+	out := map[string]any{
+		"password":    a.cfg.Password,
+		"oidc":        oidcOn,
+		"oidc_issuer": issuer,
+	}
+	if oidcOn {
+		out["oidc_button_text"] = text
+		if image != "" {
+			out["oidc_button_image"] = image
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }

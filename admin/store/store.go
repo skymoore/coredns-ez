@@ -42,7 +42,9 @@ CREATE TABLE IF NOT EXISTS oidc_config (
   issuer TEXT NOT NULL,
   client_id TEXT NOT NULL,
   client_secret TEXT NOT NULL,
-  redirect_url TEXT NOT NULL
+  redirect_url TEXT NOT NULL,
+  button_text TEXT NOT NULL DEFAULT '',
+  button_image TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS oidc_state (
   state TEXT PRIMARY KEY,
@@ -160,6 +162,8 @@ func (s *Store) Close() error { return s.db.Close() }
 func (s *Store) migrate() error {
 	// Existing DBs created the members table before role existed.
 	_, _ = s.db.Exec(`ALTER TABLE cluster_members ADD COLUMN role TEXT NOT NULL DEFAULT 'secondary'`)
+	_, _ = s.db.Exec(`ALTER TABLE oidc_config ADD COLUMN button_text TEXT NOT NULL DEFAULT ''`)
+	_, _ = s.db.Exec(`ALTER TABLE oidc_config ADD COLUMN button_image TEXT NOT NULL DEFAULT ''`)
 	return nil
 }
 

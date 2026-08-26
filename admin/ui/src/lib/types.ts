@@ -11,6 +11,8 @@ export type AuthConfig = {
   password: boolean;
   oidc: boolean;
   oidc_issuer?: string;
+  oidc_button_text?: string;
+  oidc_button_image?: string;
 };
 
 export type NodeInfo = {

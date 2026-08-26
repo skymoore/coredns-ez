@@ -102,6 +102,7 @@ func (a *Admin) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	u, err := a.db.GetUserByName(name)
 	if err != nil {
 		hash, _ := hashPassword(hex.EncodeToString(make([]byte, 16)))
+		// Empty DB: first OIDC login is admin (password-off has no bootstrap user).
 		role := store.RoleViewer
 		n, _ := a.db.UserCount()
 		if n == 0 {

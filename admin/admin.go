@@ -31,6 +31,8 @@ type oidcSettings struct {
 	ClientID     string
 	ClientSecret string
 	RedirectURL  string
+	ButtonText   string
+	ButtonImage  string
 }
 
 type coreConfig struct {
@@ -44,6 +46,8 @@ type coreConfig struct {
 	PrimaryDNS     string
 	CORS           []string
 	OIDC           *oidcSettings
+	Password       bool
+	passwordSet    bool
 }
 
 // Admin is the process-wide management plugin: HTTP mux + runtime zone owner.
