@@ -1,3 +1,18 @@
+https://.:8443 {
+	errors
+	log
+	api {
+		db /var/lib/coredns/api.sqlite
+		data /var/lib/coredns/api-zones
+		role secondary
+		dns 172.30.53.10:53
+	}
+}
+
+. {
+	api
+}
+
 # Secondary: secondary-persistent transfers example.com from the primary
 # and writes the same RFC 1035 master after each successful AXFR/IXFR.
 example.com {

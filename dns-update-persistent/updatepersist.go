@@ -82,6 +82,9 @@ type UpdatePersist struct {
 	// seedPath is both the startup load and the persist destination.
 	seedPath string
 
+	// source is zonereg.SourceAPI or zonereg.SourceCorefile. Empty means corefile.
+	source string
+
 	mu   sync.RWMutex
 	rrs  []dns.RR   // authoritative content; the source of truth
 	view *file.File // rebuilt from rrs on every change, serves reads and AXFR

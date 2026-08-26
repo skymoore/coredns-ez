@@ -11,6 +11,7 @@ import (
 	"github.com/coredns/coredns/plugin"
 	"github.com/coredns/coredns/plugin/file"
 	"github.com/coredns/coredns/plugin/transfer"
+	"github.com/skymoore/coredns-plugins/internal/zonereg"
 	"github.com/skymoore/coredns-plugins/ixfr"
 
 	"github.com/miekg/dns"
@@ -58,6 +59,14 @@ func setup(c *caddy.Controller) error {
 				}
 			}
 		}
+		if err := zonereg.RegisterPrimary(d); err != nil {
+			log.Warningf("zonereg %s: %v", d.Zone, err)
+		}
+		return nil
+	})
+
+	c.OnShutdown(func() error {
+		zonereg.Unregister(d.Zone)
 		return nil
 	})
 

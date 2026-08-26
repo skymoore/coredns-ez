@@ -16,6 +16,7 @@ import (
 	"github.com/coredns/coredns/plugin/pkg/parse"
 	"github.com/coredns/coredns/plugin/pkg/upstream"
 	"github.com/coredns/coredns/plugin/transfer"
+	"github.com/skymoore/coredns-plugins/internal/zonereg"
 )
 
 var log = clog.NewWithPlugin(pluginName)
@@ -104,7 +105,19 @@ func setup(c *caddy.Controller) error {
 		})
 	}
 
+	c.OnStartup(func() error {
+		for _, n := range zones.Names {
+			if err := zonereg.RegisterSecondary(&originView{s: s, origin: n}); err != nil {
+				log.Warningf("zonereg %s: %v", n, err)
+			}
+		}
+		return nil
+	})
+
 	c.OnShutdown(func() error {
+		for _, n := range zones.Names {
+			zonereg.Unregister(n)
+		}
 		s.stopDynamicZones()
 		s.closePersist()
 		return nil

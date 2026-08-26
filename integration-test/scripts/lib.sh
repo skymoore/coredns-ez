@@ -12,6 +12,13 @@ SECONDARY_ZONEFILE="${SECONDARY_ZONEFILE:-/secondary-data/db.example.com}"
 TSIG_NAME="${TSIG_NAME:-updater.example.com.}"
 TSIG_SECRET="${TSIG_SECRET:-Y29yZWRucy1pbnRlZ3JhdGlvbi10ZXN0LWtleSEh}"
 TSIG_ALG="${TSIG_ALG:-hmac-sha256}"
+API_PRIMARY="${API_PRIMARY:-http://172.30.53.10:8443}"
+API_SECONDARY="${API_SECONDARY:-http://172.30.53.20:8443}"
+API_USER="${API_USER:-admin}"
+API_PASS="${API_PASS:-integration-test-password}"
+API_ZONE="${API_ZONE:-it-api.example.}"
+API_OWNER="${API_OWNER:-www.it-api.example.}"
+API_ADDR="${API_ADDR:-192.0.2.99}"
 
 DIG_OPTS=(+time=2 +tries=2 +norecurse)
 
@@ -267,6 +274,39 @@ zone ${ZONE}.
 $(printf '%s\n' "$@")
 send
 EOF
+}
+
+api_curl() {
+	local base="$1" method="$2" path="$3"
+	shift 3
+	curl -sS -w '\n%{http_code}' -X "$method" "$base$path" "$@"
+}
+
+api_code() {
+	printf '%s\n' "$1" | tail -n1
+}
+
+api_body() {
+	printf '%s\n' "$1" | sed '$d'
+}
+
+json_str() {
+	local json="$1" key="$2"
+	printf '%s' "$json" | sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p" | head -n1
+}
+
+api_login() {
+	local base="$1"
+	local resp body code
+	resp=$(curl -sS -w '\n%{http_code}' -X POST "$base/api/v1/auth/login" \
+		-H 'Content-Type: application/json' \
+		-d "{\"username\":\"$API_USER\",\"password\":\"$API_PASS\"}")
+	code=$(api_code "$resp")
+	body=$(api_body "$resp")
+	if [[ "$code" != "200" ]]; then
+		return 1
+	fi
+	json_str "$body" token
 }
 
 summary() {

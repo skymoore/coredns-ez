@@ -1,8 +1,9 @@
 # syntax=docker/dockerfile:1
 #
 # Builds CoreDNS v1.14.7 with every default plugin plus the out-of-tree
-# plugins in this repo: dns-update-persistent and ixfr (after file),
-# secondary-persistent (after secondary).
+# plugins in this repo: dns-update-persistent, ixfr, api (after file),
+# secondary-persistent (after secondary). A small CoreDNS patch lets the
+# DoH listener multiplex /api onto the same 443 port.
 #
 # Build from the repository root:
 #   docker build -f integration-test/Dockerfile .
@@ -33,6 +34,9 @@ COPY go.mod go.sum ./
 COPY dns-update-persistent ./dns-update-persistent
 COPY ixfr ./ixfr
 COPY secondary-persistent ./secondary-persistent
+COPY api ./api
+COPY internal ./internal
+COPY patches ./patches
 
 WORKDIR /src/coredns
 # plugin.cfg order is the request chain. These two must sit next to the
@@ -45,8 +49,12 @@ RUN sed -i \
     -e '/^dns-update-persistent:/a ixfr:github.com/skymoore/coredns-plugins/ixfr' \
     plugin.cfg \
     && sed -i \
+    -e '/^ixfr:/a api:github.com/skymoore/coredns-plugins/api' \
+    plugin.cfg \
+    && sed -i \
     -e '/^secondary:secondary$/a secondary-persistent:github.com/skymoore/coredns-plugins/secondary-persistent' \
     plugin.cfg \
+    && git apply /plugins/patches/coredns-http-handler.patch \
     && printf '\nreplace github.com/skymoore/coredns-plugins => /plugins\n' >> go.mod \
     && printf '\nreplace github.com/coredns/coredns => /src/coredns\n' >> /plugins/go.mod
 
@@ -73,7 +81,7 @@ RUN chmod 0755 /entrypoint.sh /usr/bin/coredns
 
 # Integration tests rewrite bind-mounted persist files; run as root so the
 # volume owner does not have to match a distroless uid.
-EXPOSE 53 53/udp 8080
+EXPOSE 53 53/udp 8080 8443
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["-conf", "/etc/coredns/Corefile"]
 

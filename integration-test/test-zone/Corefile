@@ -1,3 +1,28 @@
+# API + DoH on plain HTTP :8443 (no TLS terminator in this compose stack).
+# The catch-all `.` block serves API-created zones on :53; example.com stays
+# on dns-update-persistent and must not share that origin with api.
+https://.:8443 {
+	errors
+	log
+	api {
+		db /var/lib/coredns/api.sqlite
+		data /var/lib/coredns/api-zones
+		role primary
+		bootstrap_admin admin
+		advertise 172.30.53.10:53
+	}
+	transfer {
+		to * 172.30.53.20
+	}
+}
+
+. {
+	api
+	transfer {
+		to * 172.30.53.20
+	}
+}
+
 # Primary: dns-update-persistent owns example.com.
 # Do not also configure file, auto, secondary, or secondary-persistent here.
 example.com {

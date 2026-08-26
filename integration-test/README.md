@@ -1,8 +1,8 @@
 # Integration tests
 
 Docker Compose stack that builds CoreDNS v1.14.7 with every default plugin plus
-`dns-update-persistent` and `secondary-persistent`, then exercises a real
-primary/secondary pair.
+`dns-update-persistent`, `ixfr`, `api`, and `secondary-persistent`, then
+exercises a real primary/secondary pair (DNS plus the HTTPS API on :8443).
 
 ```
 primary   172.30.53.10   dns-update-persistent   (RFC 2136 + in-place persist)

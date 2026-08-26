@@ -31,6 +31,7 @@ services:
     environment:
       ZONE_SEED: /zones/db.example.com
       ZONE_LIVE: /var/lib/coredns/db.example.com
+      COREDNS_API_BOOTSTRAP_PASSWORD: integration-test-password
     volumes:
       - ./test-zone/Corefile:/etc/coredns/Corefile:ro
       - ./test-zone/db.example.com:/zones/db.example.com:ro
@@ -39,6 +40,7 @@ services:
       - "1053:53/udp"
       - "1053:53/tcp"
       - "18080:8080"
+      - "18443:8443"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
       interval: 2s
@@ -59,6 +61,7 @@ services:
       - "1153:53/udp"
       - "1153:53/tcp"
       - "18081:8080"
+      - "18444:8443"
     depends_on:
       primary:
         condition: service_healthy
@@ -97,3 +100,7 @@ services:
       TSIG_NAME: updater.example.com.
       TSIG_SECRET: Y29yZWRucy1pbnRlZ3JhdGlvbi10ZXN0LWtleSEh
       TSIG_ALG: hmac-sha256
+      API_PRIMARY: http://172.30.53.10:8443
+      API_SECONDARY: http://172.30.53.20:8443
+      API_USER: admin
+      API_PASS: integration-test-password

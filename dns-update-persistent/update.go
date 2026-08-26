@@ -53,26 +53,32 @@ func (d *UpdatePersist) serveUpdate(w dns.ResponseWriter, r *dns.Msg) (int, erro
 		return d.reply(w, r, rcode)
 	}
 
-	updated, changed := d.apply(r.Ns)
+	return d.reply(w, r, d.commitLocked(zone, r.Ns))
+}
+
+// commitLocked applies updates to a copy, persists, journals, and swaps.
+// The caller holds d.mu. Returns the RFC 2136 rcode.
+func (d *UpdatePersist) commitLocked(zone string, updates []dns.RR) int {
+	updated, changed := d.apply(updates)
 	if !changed {
 		// RFC 2136 §3.4.2.7: an update that changes nothing is still a
 		// success. Silently doing nothing and reporting NOERROR is correct,
 		// and is why an ACME client re-adding an identical TXT does not fail.
 		writeCount.WithLabelValues(d.Zone, "skipped").Inc()
-		return d.reply(w, r, dns.RcodeSuccess)
+		return dns.RcodeSuccess
 	}
 
 	bumpSerial(updated)
 	if err := d.persistUpdated(updated); err != nil {
 		log.Errorf("persisting %s to %s: %v", zone, d.seedPath, err)
 		writeCount.WithLabelValues(d.Zone, "error").Inc()
-		return d.reply(w, r, dns.RcodeServerFailure)
+		return dns.RcodeServerFailure
 	}
 	if d.ixfr != nil {
 		if err := d.ixfr.Commit(d.rrs, updated); err != nil {
 			log.Errorf("ixfr journal for %s: %v", zone, err)
 			writeCount.WithLabelValues(d.Zone, "error").Inc()
-			return d.reply(w, r, dns.RcodeServerFailure)
+			return dns.RcodeServerFailure
 		}
 	}
 	writeCount.WithLabelValues(d.Zone, "ok").Inc()
@@ -84,7 +90,7 @@ func (d *UpdatePersist) serveUpdate(w dns.ResponseWriter, r *dns.Msg) (int, erro
 		// Disk already holds the new generation; the next restart is correct.
 		// This process keeps serving the previous view until then.
 		log.Errorf("rebuilding %s after UPDATE: %v", zone, err)
-		return d.reply(w, r, dns.RcodeServerFailure)
+		return dns.RcodeServerFailure
 	}
 
 	if d.Xfer != nil {
@@ -96,7 +102,7 @@ func (d *UpdatePersist) serveUpdate(w dns.ResponseWriter, r *dns.Msg) (int, erro
 		}
 	}
 
-	return d.reply(w, r, dns.RcodeSuccess)
+	return dns.RcodeSuccess
 }
 
 // tsigVerified reports whether the request carried a TSIG that the server

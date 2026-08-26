@@ -1,0 +1,216 @@
+diff --git a/core/dnsserver/config.go b/core/dnsserver/config.go
+index 85e07e1ee..71ce1fbf5 100644
+--- a/core/dnsserver/config.go
++++ b/core/dnsserver/config.go
+@@ -50,6 +50,12 @@ type Config struct {
+ 	// may depend on it.
+ 	HTTPRequestValidateFunc func(*http.Request) bool
+ 
++	// HTTPHandler, if set, serves HTTP requests on the DoH (and DoH3)
++	// listener that are not valid DNS-over-HTTPS requests. Paths that
++	// pass HTTPRequestValidateFunc (default: /dns-query) are still handled
++	// as DoH and never reach this handler. External plugins may depend on it.
++	HTTPHandler http.Handler
++
+ 	// If this function is not nil it is called once per Server in ServePacket
+ 	// (so each UDP listening socket gets its own decorator under multisocket)
+ 	// and its result is installed as the underlying dns.Server's
+diff --git a/core/dnsserver/register.go b/core/dnsserver/register.go
+index 0295d3515..838097818 100644
+--- a/core/dnsserver/register.go
++++ b/core/dnsserver/register.go
+@@ -281,6 +281,10 @@ func propagateConfigParams(configs []*Config) {
+ 		// multi-transport blocks. Otherwise HTTPS 404s on non-"/dns-query" paths.
+ 		c.HTTPRequestValidateFunc = c.firstConfigInBlock.HTTPRequestValidateFunc
+ 
++		// Propagate HTTPHandler so a plugin attached to one zone in a server
++		// block can multiplex non-DoH HTTP on the shared HTTPS listener.
++		c.HTTPHandler = c.firstConfigInBlock.HTTPHandler
++
+ 		// Propagate UDPDecorateWriterFunc so a decorator configured once in a
+ 		// server block applies to the block's UDP listener(s).
+ 		c.UDPDecorateWriterFunc = c.firstConfigInBlock.UDPDecorateWriterFunc
+diff --git a/core/dnsserver/server_https.go b/core/dnsserver/server_https.go
+index 8beab0e9e..420564351 100644
+--- a/core/dnsserver/server_https.go
++++ b/core/dnsserver/server_https.go
+@@ -36,6 +36,7 @@ type ServerHTTPS struct {
+ 	listenAddr     net.Addr
+ 	tlsConfig      *tls.Config
+ 	validRequest   func(*http.Request) bool
++	httpHandler    http.Handler
+ 	maxConnections int
+ }
+ 
+@@ -76,9 +77,13 @@ func NewServerHTTPS(addr string, group []*Config) (*ServerHTTPS, error) {
+ 
+ 	// Use a custom request validation func or use the standard DoH path check.
+ 	var validator func(*http.Request) bool
++	var httpHandler http.Handler
+ 	for _, z := range s.zones {
+ 		for _, conf := range z {
+ 			validator = conf.HTTPRequestValidateFunc
++			if conf.HTTPHandler != nil {
++				httpHandler = conf.HTTPHandler
++			}
+ 		}
+ 	}
+ 	if validator == nil {
+@@ -101,6 +106,7 @@ func NewServerHTTPS(addr string, group []*Config) (*ServerHTTPS, error) {
+ 		tlsConfig:      tlsConfig,
+ 		httpsServer:    srv,
+ 		validRequest:   validator,
++		httpHandler:    httpHandler,
+ 		maxConnections: maxConnections,
+ 	}
+ 	sh.httpsServer.Handler = sh
+@@ -182,6 +188,10 @@ func (s *ServerHTTPS) localAddr(r *http.Request) net.Addr {
+ // chain, converts it back and write it to the client.
+ func (s *ServerHTTPS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+ 	if !s.validRequest(r) {
++		if s.httpHandler != nil {
++			s.httpHandler.ServeHTTP(w, r)
++			return
++		}
+ 		http.Error(w, "", http.StatusNotFound)
+ 		s.countResponse(http.StatusNotFound)
+ 		return
+diff --git a/core/dnsserver/server_https3.go b/core/dnsserver/server_https3.go
+index 205d29995..018321145 100644
+--- a/core/dnsserver/server_https3.go
++++ b/core/dnsserver/server_https3.go
+@@ -39,6 +39,7 @@ type ServerHTTPS3 struct {
+ 	tlsConfig      *tls.Config
+ 	quicConfig     *quic.Config
+ 	validRequest   func(*http.Request) bool
++	httpHandler    http.Handler
+ 	maxStreams     int
+ 	maxConnections int
+ }
+@@ -98,9 +99,13 @@ func NewServerHTTPS3(addr string, group []*Config) (*ServerHTTPS3, error) {
+ 
+ 	// Request validator
+ 	var validator func(*http.Request) bool
++	var httpHandler http.Handler
+ 	for _, z := range s.zones {
+ 		for _, conf := range z {
+ 			validator = conf.HTTPRequestValidateFunc
++			if conf.HTTPHandler != nil {
++				httpHandler = conf.HTTPHandler
++			}
+ 		}
+ 	}
+ 	if validator == nil {
+@@ -142,6 +147,7 @@ func NewServerHTTPS3(addr string, group []*Config) (*ServerHTTPS3, error) {
+ 		httpsServer:    h3srv,
+ 		quicConfig:     qconf,
+ 		validRequest:   validator,
++		httpHandler:    httpHandler,
+ 		maxStreams:     maxStreams,
+ 		maxConnections: maxConnections,
+ 	}
+@@ -228,6 +234,10 @@ func (s *ServerHTTPS3) Shutdown() error {
+ // ServeHTTP is the handler for the DoH3 requests
+ func (s *ServerHTTPS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+ 	if !s.validRequest(r) {
++		if s.httpHandler != nil {
++			s.httpHandler.ServeHTTP(w, r)
++			return
++		}
+ 		http.Error(w, "", http.StatusNotFound)
+ 		s.countResponse(http.StatusNotFound)
+ 		return
+diff --git a/core/dnsserver/server_https_test.go b/core/dnsserver/server_https_test.go
+index 9c8b36bfc..3c44899a2 100644
+--- a/core/dnsserver/server_https_test.go
++++ b/core/dnsserver/server_https_test.go
+@@ -60,6 +60,89 @@ func testServerHTTPS(t *testing.T, path string, validator func(*http.Request) bo
+ 	return w.Result()
+ }
+ 
++func TestHTTPHandlerServesNonDoH(t *testing.T) {
++	mux := http.NewServeMux()
++	mux.HandleFunc("/api/v1/health", func(w http.ResponseWriter, _ *http.Request) {
++		w.WriteHeader(http.StatusOK)
++		w.Write([]byte("ok"))
++	})
++
++	c := Config{
++		Zone:        "example.com.",
++		Transport:   "https",
++		TLSConfig:   &tls.Config{},
++		ListenHosts: []string{"127.0.0.1"},
++		Port:        "443",
++		HTTPHandler: mux,
++	}
++	s, err := NewServerHTTPS("127.0.0.1:443", []*Config{&c})
++	if err != nil {
++		t.Fatal(err)
++	}
++
++	t.Run("api path", func(t *testing.T) {
++		r := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
++		w := httptest.NewRecorder()
++		s.ServeHTTP(w, r)
++		res := w.Result()
++		defer res.Body.Close()
++		if res.StatusCode != http.StatusOK {
++			t.Fatalf("status=%d", res.StatusCode)
++		}
++		body, _ := io.ReadAll(res.Body)
++		if string(body) != "ok" {
++			t.Fatalf("body=%q", body)
++		}
++	})
++
++	t.Run("dns-query still DoH", func(t *testing.T) {
++		res := testServerHTTPSWithHandler(t, "/dns-query", mux)
++		defer res.Body.Close()
++		if res.StatusCode != http.StatusOK {
++			t.Fatalf("DoH status=%d", res.StatusCode)
++		}
++		if ct := res.Header.Get("Content-Type"); ct != "application/dns-message" && ct != "" {
++			// DoH replies with application/dns-message when the chain answers.
++			_ = ct
++		}
++	})
++
++	t.Run("unknown path 404 from mux", func(t *testing.T) {
++		r := httptest.NewRequest(http.MethodGet, "/nope", nil)
++		w := httptest.NewRecorder()
++		s.ServeHTTP(w, r)
++		if w.Result().StatusCode != http.StatusNotFound {
++			t.Fatalf("status=%d", w.Result().StatusCode)
++		}
++	})
++}
++
++func testServerHTTPSWithHandler(t *testing.T, path string, h http.Handler) *http.Response {
++	t.Helper()
++	c := Config{
++		Zone:        "example.com.",
++		Transport:   "https",
++		TLSConfig:   &tls.Config{},
++		ListenHosts: []string{"127.0.0.1"},
++		Port:        "443",
++		HTTPHandler: h,
++	}
++	s, err := NewServerHTTPS("127.0.0.1:443", []*Config{&c})
++	if err != nil {
++		t.Fatal("could not create HTTPS server")
++	}
++	m := new(dns.Msg)
++	m.SetQuestion("example.org.", dns.TypeDNSKEY)
++	buf, err := m.Pack()
++	if err != nil {
++		t.Fatal(err)
++	}
++	r := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(buf))
++	w := httptest.NewRecorder()
++	s.ServeHTTP(w, r)
++	return w.Result()
++}
++
+ func TestCustomHTTPRequestValidator(t *testing.T) {
+ 	testCases := map[string]struct {
+ 		path      string

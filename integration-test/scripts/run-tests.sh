@@ -314,6 +314,136 @@ stage_bootstrap() {
 	else
 		fail "secondary file contains persist-probe"
 	fi
+
+	stage_api
+}
+
+stage_api() {
+	echo "-- API plugin on DoH :8443"
+	local code body token resp
+
+	resp=$(curl -sS -w '\n%{http_code}' "$API_PRIMARY/api/v1/health" || true)
+	code=$(api_code "$resp")
+	body=$(api_body "$resp")
+	if [[ "$code" == "200" ]] && printf '%s' "$body" | grep -q primary; then
+		pass "GET $API_PRIMARY/api/v1/health"
+	else
+		fail "GET $API_PRIMARY/api/v1/health" "code=$code body=$body"
+		return
+	fi
+
+	resp=$(curl -sS -w '\n%{http_code}' "$API_PRIMARY/api/v1/zones" || true)
+	code=$(api_code "$resp")
+	if [[ "$code" == "401" ]]; then
+		pass "GET /api/v1/zones is 401 without auth"
+	else
+		fail "GET /api/v1/zones is 401 without auth" "code=$code"
+	fi
+
+	token=$(api_login "$API_PRIMARY" || true)
+	if [[ -n "$token" && "$token" != "null" ]]; then
+		pass "POST /api/v1/auth/login on primary"
+	else
+		fail "POST /api/v1/auth/login on primary"
+		return
+	fi
+
+	resp=$(curl -sS -w '\n%{http_code}' -X POST "$API_PRIMARY/api/v1/zones" \
+		-H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+		-d "{\"origin\":\"$API_ZONE\",\"type\":\"primary\"}")
+	code=$(api_code "$resp")
+	if [[ "$code" == "200" || "$code" == "201" ]]; then
+		pass "POST /api/v1/zones $API_ZONE"
+	else
+		fail "POST /api/v1/zones $API_ZONE" "code=$code body=$(api_body "$resp")"
+		return
+	fi
+
+	resp=$(curl -sS -w '\n%{http_code}' -X POST "$API_PRIMARY/api/v1/zones/${API_ZONE}/records" \
+		-H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+		-d "{\"name\":\"$API_OWNER\",\"type\":\"A\",\"ttl\":60,\"rdata\":\"$API_ADDR\"}")
+	code=$(api_code "$resp")
+	if [[ "$code" == "201" ]]; then
+		pass "POST A $API_OWNER"
+	else
+		fail "POST A $API_OWNER" "code=$code body=$(api_body "$resp")"
+		return
+	fi
+
+	if wait_rr "$PRIMARY" "$API_OWNER" A "$API_ADDR" 20; then
+		pass "primary UDP serves API-created $API_OWNER"
+	else
+		fail "primary UDP serves API-created $API_OWNER"
+	fi
+
+	local doh_code ctype
+	# RFC 8484 POST. Bare GET /dns-query must not be the JSON mux (400 = DoH parse).
+	doh_code=$(curl -sS -o /dev/null -w '%{http_code}' "$API_PRIMARY/dns-query" || true)
+	if [[ "$doh_code" != "200" ]]; then
+		pass "GET /dns-query is DoH not the JSON API (code=$doh_code)"
+	else
+		fail "GET /dns-query is DoH not the JSON API" "code=$doh_code"
+	fi
+	# www.it-api.example. IN A, RD, id=1. Write the wire query to a file:
+	# bash $(...) strips NUL bytes.
+	printf '\x00\x01\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x03www\x06it-api\x07example\x00\x00\x01\x00\x01' > /tmp/doh.q
+	doh_code=$(curl -sS -o /tmp/doh.msg -w '%{http_code}' -X POST "$API_PRIMARY/dns-query" \
+		-H 'Content-Type: application/dns-message' --data-binary @/tmp/doh.q || true)
+	if [[ "$doh_code" == "200" ]]; then
+		pass "POST /dns-query DoH answers API-created zone (http $doh_code)"
+	else
+		fail "POST /dns-query DoH answers API-created zone" "code=$doh_code"
+	fi
+
+	resp=$(curl -sS -w '\n%{http_code}' -X POST "$API_PRIMARY/api/v1/cluster/join-tokens" \
+		-H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+		-d '{"ttl":"1h"}')
+	code=$(api_code "$resp")
+	body=$(api_body "$resp")
+	local join_tok
+	join_tok=$(json_str "$body" token)
+	if [[ "$code" == "201" && -n "$join_tok" && "$join_tok" != "null" ]]; then
+		pass "POST /api/v1/cluster/join-tokens"
+	else
+		fail "POST /api/v1/cluster/join-tokens" "code=$code body=$body"
+		return
+	fi
+
+	resp=$(curl -sS -w '\n%{http_code}' -X POST "$API_SECONDARY/api/v1/cluster/connect" \
+		-H 'Content-Type: application/json' \
+		-d "{\"url\":\"$API_PRIMARY\",\"token\":\"$join_tok\",\"dns\":\"$SECONDARY:53\",\"api_url\":\"$API_SECONDARY\"}")
+	code=$(api_code "$resp")
+	if [[ "$code" == "200" ]]; then
+		pass "POST secondary /api/v1/cluster/connect"
+	else
+		fail "POST secondary /api/v1/cluster/connect" "code=$code body=$(api_body "$resp")"
+		return
+	fi
+
+	local stoken
+	stoken=$(api_login "$API_SECONDARY" || true)
+	if [[ -n "$stoken" && "$stoken" != "null" ]]; then
+		pass "login on secondary with primary credentials"
+	else
+		fail "login on secondary with primary credentials"
+		return
+	fi
+
+	resp=$(curl -sS -w '\n%{http_code}' "$API_SECONDARY/api/v1/zones" \
+		-H "Authorization: Bearer $stoken")
+	code=$(api_code "$resp")
+	body=$(api_body "$resp")
+	if [[ "$code" == "200" ]] && printf '%s' "$body" | grep -q 'it-api.example'; then
+		pass "secondary GET /api/v1/zones lists $API_ZONE"
+	else
+		fail "secondary GET /api/v1/zones lists $API_ZONE" "code=$code body=$body"
+	fi
+
+	if wait_rr "$SECONDARY" "$API_OWNER" A "$API_ADDR" 45; then
+		pass "secondary UDP serves API-created $API_OWNER"
+	else
+		fail "secondary UDP serves API-created $API_OWNER"
+	fi
 }
 
 stage_primary_restart() {
@@ -339,6 +469,15 @@ stage_primary_restart() {
 	fi
 	assert_file_grep "$PRIMARY_ZONEFILE" 'persist-probe' "primary file still contains persist-probe"
 
+	local token
+	token=$(api_login "$API_PRIMARY" || true)
+	if [[ -n "$token" && "$token" != "null" ]]; then
+		pass "API login on primary after restart"
+	else
+		fail "API login on primary after restart"
+	fi
+	assert_rr "$PRIMARY" "$API_OWNER" A "$API_ADDR" "primary still serves API-created A after restart"
+
 	if wait_rr "$SECONDARY" "persist-probe.$ZONE" TXT '"still-here"' 30; then
 		pass "secondary still serves persist-probe"
 	else
@@ -361,6 +500,15 @@ stage_secondary_alone() {
 	assert_rr_grep "$SECONDARY" "st-naptr.$ZONE" NAPTR "E2U" "secondary still serves seed NAPTR from disk"
 	assert_no_rr "$SECONDARY" "it-a.$ZONE" A "192.0.2.50" "secondary did not resurrect deleted it-a"
 	assert_file_grep "$SECONDARY_ZONEFILE" 'persist-probe' "secondary file still contains persist-probe"
+
+	local stoken
+	stoken=$(api_login "$API_SECONDARY" || true)
+	if [[ -n "$stoken" && "$stoken" != "null" ]]; then
+		pass "API login on secondary with primary down"
+	else
+		fail "API login on secondary with primary down"
+	fi
+	assert_rr "$SECONDARY" "$API_OWNER" A "$API_ADDR" "secondary still serves API-created A with primary down"
 
 	local prc
 	prc=$(rcode "$PRIMARY" "$ZONE" SOA || true)

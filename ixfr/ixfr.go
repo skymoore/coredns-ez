@@ -11,6 +11,7 @@ package ixfr
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/coredns/coredns/plugin"
@@ -25,6 +26,19 @@ var log = clog.NewWithPlugin(pluginName)
 const pluginName = "ixfr"
 
 const defaultHistory = 64
+
+// New returns an unregistered journal for origin. The API plugin uses this
+// for runtime primaries; Corefile setup still goes through parse().
+func New(origin, path string, history int) *IXFR {
+	if history < 1 {
+		history = defaultHistory
+	}
+	return &IXFR{
+		Zone:    strings.ToLower(dns.CanonicalName(origin)),
+		path:    path,
+		history: history,
+	}
+}
 
 // IXFR is the plugin. It does not answer queries; ServeDNS falls through.
 type IXFR struct {

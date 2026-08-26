@@ -33,6 +33,10 @@ Do not configure `file`, `auto`, `dynupdate`, `secondary`, or `secondary-persist
 
 RFC 1995 incremental transfers for a zone owned by *dns-update-persistent*. Without it, that plugin uses CoreDNS's AXFR-style IXFR fallback. See [ixfr/README.md](ixfr/README.md).
 
+## api
+
+HTTPS management plane on the DoH listener (`/dns-query` stays DoH; `/api/v1` is the JSON API). Runtime primary/secondary zones, OIDC + bearer auth, SQLite identity store, and cluster join so a secondary accepts the same credentials as the primary. See [api/README.md](api/README.md). Requires `patches/coredns-http-handler.patch` on the CoreDNS tree.
+
 ## Integration tests
 
 `integration-test/` builds CoreDNS v1.14.7 with both plugins, runs a primary (`dns-update-persistent`) and a secondary (`secondary-persistent`) in Docker Compose, and checks queries, AXFR, IXFR, RFC 2136 updates, and persist-across-restart. See [integration-test/README.md](integration-test/README.md).

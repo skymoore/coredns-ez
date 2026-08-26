@@ -1,0 +1,303 @@
+package api
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+
+	"github.com/coredns/caddy"
+	"github.com/coredns/coredns/core/dnsserver"
+	"github.com/coredns/coredns/plugin"
+	"github.com/coredns/coredns/plugin/pkg/parse"
+	"github.com/coredns/coredns/plugin/transfer"
+	"github.com/skymoore/coredns-plugins/api/store"
+	dnsupdatepersist "github.com/skymoore/coredns-plugins/dns-update-persistent"
+)
+
+func init() { plugin.Register(pluginName, setup) }
+
+var (
+	instanceMu sync.Mutex
+	instance   *API
+)
+
+func setup(c *caddy.Controller) error {
+	cfg, empty, err := parseAPI(c)
+	if err != nil {
+		return plugin.Error(pluginName, err)
+	}
+
+	instanceMu.Lock()
+	defer instanceMu.Unlock()
+
+	if instance != nil {
+		if !empty {
+			if err := instance.sameConfig(cfg); err != nil {
+				return plugin.Error(pluginName, err)
+			}
+		}
+		attach(c, instance)
+		return nil
+	}
+	if empty {
+		return plugin.Error(pluginName, fmt.Errorf("db, data, and role are required"))
+	}
+
+	a, err := newAPI(cfg)
+	if err != nil {
+		return plugin.Error(pluginName, err)
+	}
+	instance = a
+	attach(c, a)
+
+	c.OnStartup(func() error {
+		if t := dnsserver.GetConfig(c).Handler("transfer"); t != nil {
+			if x, ok := t.(*transfer.Transfer); ok {
+				a.xfer = x
+				a.mu.Lock()
+				for _, p := range a.primaries {
+					p.SetTransfer(x)
+				}
+				if a.secondaries != nil {
+					a.secondaries.SetTransfer(x)
+				}
+				a.mu.Unlock()
+			}
+		}
+		return a.loadPersistedZones()
+	})
+	c.OnShutdown(func() error {
+		instanceMu.Lock()
+		if instance == a {
+			instance = nil
+		}
+		instanceMu.Unlock()
+		return a.close()
+	})
+	return nil
+}
+
+func attach(c *caddy.Controller, a *API) {
+	cfg := dnsserver.GetConfig(c)
+	if cfg.Transport == "https" || cfg.Transport == "https3" {
+		if !installHTTPHandler(cfg, a.mux) {
+			log.Warning("CoreDNS was built without HTTPHandler; API will not be served on the DoH listener. Apply patches/coredns-http-handler.patch.")
+		}
+	}
+	cfg.AddPlugin(func(next plugin.Handler) plugin.Handler {
+		a.Next = next
+		a.mu.Lock()
+		for _, p := range a.primaries {
+			p.SetNext(next)
+		}
+		if a.secondaries != nil {
+			a.secondaries.SetNext(next)
+		}
+		a.mu.Unlock()
+		return a
+	})
+}
+
+func newAPI(cfg coreConfig) (*API, error) {
+	if err := os.MkdirAll(cfg.Data, 0o755); err != nil {
+		return nil, err
+	}
+	db, err := store.Open(cfg.DB)
+	if err != nil {
+		return nil, err
+	}
+	if err := db.SetMeta(store.MetaRole, cfg.Role); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if cfg.AdvertiseDNS != "" {
+		_ = db.SetMeta(store.MetaAdvertise, cfg.AdvertiseDNS)
+	}
+	if cfg.OIDC != nil {
+		_ = db.UpsertOIDC(store.OIDCConfig{
+			Issuer: cfg.OIDC.Issuer, ClientID: cfg.OIDC.ClientID,
+			ClientSecret: cfg.OIDC.ClientSecret, RedirectURL: cfg.OIDC.RedirectURL,
+		})
+	}
+
+	n, err := db.UserCount()
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if n == 0 && cfg.Role == rolePrimary {
+		pass := os.Getenv("COREDNS_API_BOOTSTRAP_PASSWORD")
+		if cfg.BootstrapAdmin == "" || pass == "" {
+			_ = db.Close()
+			return nil, fmt.Errorf("empty database requires bootstrap_admin and COREDNS_API_BOOTSTRAP_PASSWORD")
+		}
+		hash, err := hashPassword(pass)
+		if err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+		if err := db.CreateUser(store.User{
+			Username: store.NormalizeUsername(cfg.BootstrapAdmin), PasswordHash: hash, Role: store.RoleAdmin,
+		}); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+	}
+
+	a := &API{
+		cfg:        cfg,
+		db:         db,
+		primaries:  map[string]*dnsupdatepersist.UpdatePersist{},
+		httpClient: &http.Client{Timeout: 15 * time.Second},
+		stop:       make(chan struct{}),
+	}
+
+	if cfg.OIDC != nil {
+		rt, err := newOIDC(context.Background(), *cfg.OIDC)
+		if err != nil {
+			log.Warningf("oidc provider: %v (OIDC login disabled until reachable)", err)
+		} else {
+			a.oidc = rt
+		}
+	} else if oc, err := db.GetOIDC(); err == nil {
+		rt, err := newOIDC(context.Background(), oidcSettings{
+			Issuer: oc.Issuer, ClientID: oc.ClientID, ClientSecret: oc.ClientSecret, RedirectURL: oc.RedirectURL,
+		})
+		if err == nil {
+			a.oidc = rt
+		}
+	}
+
+	a.mux = a.routes()
+
+	if cfg.Role == roleSecondary {
+		cluster, _ := db.Meta(store.MetaClusterID)
+		if cluster == "" && cfg.JoinURL != "" && cfg.JoinToken != "" {
+			name, _ := os.Hostname()
+			if err := a.joinPrimary(cfg.JoinURL, cfg.JoinToken, name, cfg.AdvertiseDNS, ""); err != nil {
+				_ = db.Close()
+				return nil, fmt.Errorf("join: %w", err)
+			}
+		}
+		go a.pullLoop()
+	}
+	return a, nil
+}
+
+func (a *API) sameConfig(cfg coreConfig) error {
+	if cfg.DB != "" && cfg.DB != a.cfg.DB {
+		return fmt.Errorf("conflicting db path")
+	}
+	if cfg.Data != "" && cfg.Data != a.cfg.Data {
+		return fmt.Errorf("conflicting data dir")
+	}
+	if cfg.Role != "" && cfg.Role != a.cfg.Role {
+		return fmt.Errorf("conflicting role")
+	}
+	return nil
+}
+
+func parseAPI(c *caddy.Controller) (coreConfig, bool, error) {
+	cfg := coreConfig{}
+	if !c.Next() {
+		return cfg, true, c.ArgErr()
+	}
+	if len(c.RemainingArgs()) > 0 {
+		return cfg, false, c.ArgErr()
+	}
+	empty := true
+	config := dnsserver.GetConfig(c)
+	for c.NextBlock() {
+		empty = false
+		switch c.Val() {
+		case "db":
+			if !c.NextArg() {
+				return cfg, false, c.ArgErr()
+			}
+			cfg.DB = abs(config.Root, c.Val())
+		case "data":
+			if !c.NextArg() {
+				return cfg, false, c.ArgErr()
+			}
+			cfg.Data = abs(config.Root, c.Val())
+		case "role":
+			if !c.NextArg() {
+				return cfg, false, c.ArgErr()
+			}
+			if c.Val() != rolePrimary && c.Val() != roleSecondary {
+				return cfg, false, c.Errf("role must be primary or secondary")
+			}
+			cfg.Role = c.Val()
+		case "bootstrap_admin":
+			if !c.NextArg() {
+				return cfg, false, c.ArgErr()
+			}
+			cfg.BootstrapAdmin = c.Val()
+		case "advertise":
+			if !c.NextArg() {
+				return cfg, false, c.ArgErr()
+			}
+			cfg.AdvertiseDNS = c.Val()
+		case "join":
+			args := c.RemainingArgs()
+			if len(args) != 2 {
+				return cfg, false, c.ArgErr()
+			}
+			cfg.JoinURL, cfg.JoinToken = args[0], args[1]
+		case "dns":
+			if !c.NextArg() {
+				return cfg, false, c.ArgErr()
+			}
+			hp, err := parse.HostPort(c.Val(), "53")
+			if err != nil {
+				return cfg, false, err
+			}
+			cfg.PrimaryDNS = hp
+		case "cors":
+			cfg.CORS = c.RemainingArgs()
+		case "oidc":
+			oc := &oidcSettings{}
+			for c.NextBlock() {
+				key := c.Val()
+				if !c.NextArg() {
+					return cfg, false, c.ArgErr()
+				}
+				switch key {
+				case "issuer":
+					oc.Issuer = c.Val()
+				case "client_id":
+					oc.ClientID = c.Val()
+				case "client_secret":
+					oc.ClientSecret = c.Val()
+				case "redirect_url":
+					oc.RedirectURL = c.Val()
+				default:
+					return cfg, false, c.Errf("unknown oidc property %q", key)
+				}
+			}
+			if oc.Issuer == "" || oc.ClientID == "" || oc.ClientSecret == "" || oc.RedirectURL == "" {
+				return cfg, false, c.Err("oidc requires issuer, client_id, client_secret, redirect_url")
+			}
+			cfg.OIDC = oc
+		default:
+			return cfg, false, c.Errf("unknown property %q", c.Val())
+		}
+	}
+	if !empty {
+		if cfg.DB == "" || cfg.Data == "" || cfg.Role == "" {
+			return cfg, false, fmt.Errorf("db, data, and role are required")
+		}
+	}
+	return cfg, empty, nil
+}
+
+func abs(root, p string) string {
+	if !filepath.IsAbs(p) && root != "" {
+		p = filepath.Join(root, p)
+	}
+	return filepath.Clean(p)
+}
