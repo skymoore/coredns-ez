@@ -15,7 +15,7 @@ The interesting one is **admin**: a management-plane plugin that multiplexes ont
 - `secondary-persistent`
 - `patches/coredns-http-handler.patch` so the DoH listener can serve the UI and API
 
-Archives use the same names and platform matrix as [coredns/coredns](https://github.com/coredns/coredns/releases) (`coredns_<version>_<os>_<arch>.tgz`, plus `.zip` on Windows). Swap the binary in and add an `admin` block to the Corefile; see [admin/README.md](admin/README.md).
+Archives use the same names as [coredns/coredns](https://github.com/coredns/coredns/releases) (`coredns_<version>_<os>_<arch>.tgz`, plus `.zip` on Windows). Platforms match upstream except **linux/mips** and **linux/mips64le**: admin stores identity in `modernc.org/sqlite`, which has no port there. Swap the binary in and add an `admin` block to the Corefile; see [admin/README.md](admin/README.md).
 
 The Release workflow (`.github/workflows/release.yml`) builds the SPA, injects the plugins, and publishes on `workflow_dispatch` or when a new upstream CoreDNS release appears.
 
