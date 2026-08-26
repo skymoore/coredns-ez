@@ -8,7 +8,9 @@ admin/ui/node_modules
 admin/ui/dist
 coredns
 *.test
-integration-test
+# integration-test/ must stay in the context: compose builds
+# integration-test/Dockerfile from the repo root and COPY
+# integration-test/entrypoint.sh plus scripts.
 scripts
 README.md
 PRODUCT.md

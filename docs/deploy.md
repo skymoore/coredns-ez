@@ -39,28 +39,22 @@ Cluster (fixed IPs, because `transfer { to }` is IP-only): see
 [docker-compose.cluster.yml](../docker-compose.cluster.yml). Start the primary,
 mint a join key in Cluster, then start the secondary with `COREDNS_JOIN_TOKEN`.
 
-## Alpine
+## Host install
 
 ```
-curl -fsSL https://raw.githubusercontent.com/skymoore/coredns-ez/main/scripts/install-alpine.sh | sudo sh
+curl -fsSL https://raw.githubusercontent.com/skymoore/coredns-ez/main/scripts/install.sh | sudo sh
 ```
 
-OpenRC + Unbound on :5353 (private clients only). CoreDNS :53 serves admin
-zones to everyone and recurses **only** for private client IPs (`view lan`).
-Existing Corefile / unbound.conf / `/etc/conf.d/coredns` are left alone. Re-run
-after every binary upgrade so `cap_net_bind_service` is restored.
-
-## Debian/Ubuntu
+Alpine (OpenRC) or Debian/Ubuntu (systemd). Recursion is on for Alpine, off
+on Debian/Ubuntu unless `UNBOUND=1`. Pin and start:
 
 ```
-curl -fsSL https://raw.githubusercontent.com/skymoore/coredns-ez/main/scripts/install-systemd.sh | sudo sh
+curl -fsSL …/scripts/install.sh | sudo START=1 VERSION=v1.14.7 UNBOUND=1 sh
 ```
 
-Authoritative + UI :8080, no recursion. Optional:
-
-```
-curl -fsSL …/scripts/install-systemd.sh | sudo UNBOUND=1 START=1 sh
-```
+Re-run to replace the binary and restore `cap_net_bind_service`. If CoreDNS is
+already running it is restarted. Corefile, unbound.conf, and the unit/OpenRC
+file are not overwritten.
 
 ## TLS
 
@@ -118,8 +112,9 @@ schema changes are additive.
 
 - Docker: `docker pull ghcr.io/skymoore/coredns-ez:<tag>` and recreate the
   container with the **same volume**.
-- Host: re-run the installer. It restores `cap_net_bind_service` and does not
-  overwrite Corefile, unbound.conf, or the unit file.
+- Host: re-run `scripts/install.sh` (same curl line as install). It replaces
+  the binary, restores `cap_net_bind_service`, and restarts CoreDNS if it is
+  already running. Corefile, unbound.conf, and the unit file stay put.
 
 A new CoreDNS minor is released only if `patches/coredns-http-handler.patch`
 applies. linux/mips and linux/mips64le are omitted (`modernc.org/sqlite`). Do

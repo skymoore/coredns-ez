@@ -1,13 +1,14 @@
 #!/bin/sh
-# Install a skymoore/coredns-ez release on Debian/Ubuntu (systemd).
+# Install or update a skymoore/coredns-ez release.
+# Detects Alpine (OpenRC) vs Debian/Ubuntu (systemd).
 #
-#   curl -fsSL https://raw.githubusercontent.com/skymoore/coredns-ez/main/scripts/install-systemd.sh | sudo sh
+#   curl -fsSL https://raw.githubusercontent.com/skymoore/coredns-ez/main/scripts/install.sh | sudo sh
 #   curl -fsSL … | sudo START=1 VERSION=v1.14.7 sh
-# Recursion (Unbound :5353 + view lan): UNBOUND=1
+# Recursion: default on Alpine; on Debian/Ubuntu pass UNBOUND=1.
 #
-# Does not overwrite an existing Corefile, unit, /etc/default/coredns, or
-# unbound.conf (once seeded). Re-run after upgrades so cap_net_bind_service
-# is restored.
+# Re-run to replace the binary, restore cap_net_bind_service, and restart
+# if CoreDNS is already running. Does not overwrite Corefile, unbound.conf,
+# or the service file once they exist.
 set -eu
 
 REPO="${REPO:-skymoore/coredns-ez}"
@@ -17,21 +18,31 @@ LIB_DIR="${LIB_DIR:-/var/lib/coredns}"
 USER_NAME="${USER_NAME:-coredns}"
 BIND_CAP="${BIND_CAP:-cap_net_bind_service=+ep}"
 UNBOUND_PORT="${UNBOUND_PORT:-5353}"
-INSTALLER="https://raw.githubusercontent.com/${REPO}/main/scripts/install-systemd.sh"
+INSTALLER="https://raw.githubusercontent.com/${REPO}/main/scripts/install.sh"
+OS=""
+UPDATE=""
 
 die() { printf '%s\n' "$*" >&2; exit 1; }
 
 need_root() { [ "$(id -u)" -eq 0 ] || die "run as root"; }
 
-need_debian() {
-	[ -f /etc/os-release ] || die "not a Debian/Ubuntu system"
-	# shellcheck disable=SC1091
-	. /etc/os-release
-	case "${ID:-}" in
-	debian | ubuntu) ;;
-	*) die "Debian or Ubuntu required (ID=${ID:-unknown})" ;;
-	esac
-	command -v apt-get >/dev/null || die "apt-get not found"
+detect_os() {
+	if command -v apk >/dev/null 2>&1; then
+		OS=alpine
+		return
+	fi
+	if [ -f /etc/os-release ]; then
+		# shellcheck disable=SC1091
+		. /etc/os-release
+		case "${ID:-}" in
+		debian | ubuntu)
+			command -v apt-get >/dev/null || die "apt-get not found"
+			OS=debian
+			return
+			;;
+		esac
+	fi
+	die "Alpine (apk) or Debian/Ubuntu (apt) required"
 }
 
 github_curl() {
@@ -70,23 +81,51 @@ arch() {
 	ppc64le) printf 'ppc64le' ;;
 	s390x) printf 's390x' ;;
 	riscv64) printf 'riscv64' ;;
+	loongarch64) printf 'loong64' ;;
 	*) die "unsupported arch: $(uname -m)" ;;
 	esac
 }
 
-ensure_pkgs() {
-	pkgs="ca-certificates curl libcap2-bin"
+want_unbound() {
 	if [ "${UNBOUND:-}" = "1" ]; then
+		return 0
+	fi
+	if [ "${UNBOUND:-}" = "0" ]; then
+		return 1
+	fi
+	[ "$OS" = alpine ]
+}
+
+already_installed() {
+	[ -x "${PREFIX}/bin/coredns" ] && [ -f "${CONF_DIR}/Corefile" ]
+}
+
+ensure_pkgs() {
+	if [ "$OS" = alpine ]; then
+		pkgs="ca-certificates curl libcap-utils"
+		if want_unbound; then
+			pkgs="$pkgs unbound"
+		fi
+		# shellcheck disable=SC2086
+		apk add --no-cache $pkgs
+		return
+	fi
+	pkgs="ca-certificates curl libcap2-bin"
+	if want_unbound; then
 		pkgs="$pkgs unbound"
 	fi
-	# shellcheck disable=SC2086
 	DEBIAN_FRONTEND=noninteractive apt-get update -qq
 	# shellcheck disable=SC2086
 	DEBIAN_FRONTEND=noninteractive apt-get install -y -qq $pkgs
 }
 
 ensure_user() {
-	if ! getent passwd "$USER_NAME" >/dev/null; then
+	if getent passwd "$USER_NAME" >/dev/null; then
+		return
+	fi
+	if [ "$OS" = alpine ]; then
+		adduser -D -H -s /sbin/nologin "$USER_NAME"
+	else
 		useradd --system --no-create-home --shell /usr/sbin/nologin "$USER_NAME"
 	fi
 }
@@ -101,7 +140,6 @@ install_binary() {
 	base="coredns_${VERSION#v}_linux_${goarch}"
 	url="https://github.com/${REPO}/releases/download/${VERSION}/${base}.tgz"
 	tmp="$(mktemp -d)"
-	trap 'rm -rf "$tmp"' EXIT
 	github_curl "$url" -o "$tmp/${base}.tgz"
 	if github_curl "$url.sha256" -o "$tmp/${base}.tgz.sha256"; then
 		(cd "$tmp" && sha256sum -c "${base}.tgz.sha256")
@@ -109,12 +147,11 @@ install_binary() {
 	tar -xzf "$tmp/${base}.tgz" -C "$tmp"
 	[ -x "$tmp/coredns" ] || die "archive missing coredns binary"
 	install -m 0755 "$tmp/coredns" "$PREFIX/bin/coredns"
+	rm -rf "$tmp"
 	setcap "$BIND_CAP" "$PREFIX/bin/coredns"
 	getcap "$PREFIX/bin/coredns" | grep -q cap_net_bind_service \
-		|| die "setcap failed; is libcap2-bin installed?"
+		|| die "setcap failed; is libcap installed?"
 	"$PREFIX/bin/coredns" -version
-	trap - EXIT
-	rm -rf "$tmp"
 }
 
 lan_view() {
@@ -126,32 +163,37 @@ EOF
 }
 
 write_unbound() {
-	[ "${UNBOUND:-}" = "1" ] || return 0
+	want_unbound || return 0
 	conf=/etc/unbound/unbound.conf
 	if [ -f "$conf" ] && grep -qE 'coredns-ez|coredns-plugins' "$conf"; then
 		printf 'keep existing %s\n' "$conf"
 		return
 	fi
+	mkdir -p /etc/unbound/unbound.conf.d
 	if [ -f "$conf" ]; then
 		cp -a "$conf" "${conf}.dist"
 	fi
-	mkdir -p /etc/unbound/unbound.conf.d
 	anchor=""
-	if [ -f /usr/share/dns/root.key ]; then
+	if [ -f /usr/share/dnssec-root/trusted-key.key ]; then
+		anchor='	trust-anchor-file: "/usr/share/dnssec-root/trusted-key.key"'
+	elif [ -f /etc/unbound/root.key ]; then
+		anchor='	auto-trust-anchor-file: "/etc/unbound/root.key"'
+	elif [ -f /usr/share/dns/root.key ]; then
 		anchor='	auto-trust-anchor-file: "/usr/share/dns/root.key"'
 	elif [ -f /var/lib/unbound/root.key ]; then
 		anchor='	auto-trust-anchor-file: "/var/lib/unbound/root.key"'
 	fi
 	cat >"$conf" <<EOF
-# Seeded by coredns-ez install-systemd.sh.
+# Seeded by coredns-ez install.sh.
 server:
 	verbosity: 1
-	interface: 127.0.0.1@${UNBOUND_PORT}
-	interface: ::1@${UNBOUND_PORT}
-	do-daemonize: no
 	username: "unbound"
 	directory: "/etc/unbound"
 	chroot: ""
+	interface: 127.0.0.1@${UNBOUND_PORT}
+	interface: ::1@${UNBOUND_PORT}
+	interface: 0.0.0.0@${UNBOUND_PORT}
+	interface: ::0@${UNBOUND_PORT}
 	access-control: 0.0.0.0/0 refuse
 	access-control: ::0/0 refuse
 	access-control: 127.0.0.0/8 allow
@@ -167,9 +209,17 @@ server:
 	hide-identity: yes
 	hide-version: yes
 ${anchor}
-include: "/etc/unbound/unbound.conf.d/*.conf"
 EOF
-	printf 'seeded %s\n' "$conf"
+	if [ "$OS" = alpine ]; then
+		printf '\ninclude-toplevel: "/etc/unbound/unbound.conf.d/*.conf"\n' >>"$conf"
+		if command -v unbound-checkconf >/dev/null && ! unbound-checkconf "$conf" >/dev/null; then
+			[ -f "${conf}.dist" ] && mv "${conf}.dist" "$conf"
+			die "unbound-checkconf failed for $conf"
+		fi
+	else
+		printf '\ninclude: "/etc/unbound/unbound.conf.d/*.conf"\n' >>"$conf"
+	fi
+	printf 'seeded %s (recursion on :%s from private IPs)\n' "$conf" "$UNBOUND_PORT"
 }
 
 write_corefile() {
@@ -178,7 +228,7 @@ write_corefile() {
 		printf 'keep existing %s\n' "$corefile"
 		return
 	fi
-	if [ "${UNBOUND:-}" = "1" ]; then
+	if want_unbound; then
 		cat >"$corefile" <<EOF
 https://.:8080 {
 	errors
@@ -192,12 +242,16 @@ https://.:8080 {
 }
 . {
 $(lan_view)
+	errors
+	log
 	admin
 	forward . 127.0.0.1:${UNBOUND_PORT}
 	cache
 	transfer { to 127.0.0.1 }
 }
 . {
+	errors
+	log
 	admin
 	transfer { to 127.0.0.1 }
 }
@@ -227,7 +281,45 @@ EOF
 	printf 'seeded %s\n' "$corefile"
 }
 
-write_unit() {
+write_service() {
+	if [ "$OS" = alpine ]; then
+		initd=/etc/init.d/coredns
+		if [ -f "$initd" ]; then
+			printf 'keep existing %s\n' "$initd"
+		else
+			cat >"$initd" <<EOF
+#!/sbin/openrc-run
+
+name="CoreDNS"
+description="CoreDNS (skymoore/coredns-ez)"
+command="${PREFIX}/bin/coredns"
+command_args="-conf ${CONF_DIR}/Corefile"
+command_user="${USER_NAME}:${USER_NAME}"
+command_background=yes
+pidfile="/run/coredns.pid"
+capabilities="^cap_net_bind_service"
+
+depend() {
+	need net
+	use logger unbound
+	after unbound
+	provide dns
+}
+EOF
+			chmod 755 "$initd"
+		fi
+		confd=/etc/conf.d/coredns
+		if [ ! -f "$confd" ]; then
+			cat >"$confd" <<'EOF'
+# OpenRC sources this file but does not export it. Prefix every secret with export.
+# export COREDNS_ADMIN_BOOTSTRAP_PASSWORD=''
+# export COREDNS_OIDC_CLIENT_SECRET=''
+EOF
+			chown "$USER_NAME:$USER_NAME" "$confd"
+			chmod 640 "$confd"
+		fi
+		return
+	fi
 	unit=/etc/systemd/system/coredns.service
 	if [ -f "$unit" ]; then
 		printf 'keep existing %s\n' "$unit"
@@ -235,7 +327,7 @@ write_unit() {
 		cat >"$unit" <<EOF
 [Unit]
 Description=CoreDNS (skymoore/coredns-ez)
-Documentation=https://github.com/skymoore/coredns-ez
+Documentation=https://github.com/${REPO}
 After=network-online.target
 Wants=network-online.target
 
@@ -254,7 +346,6 @@ EnvironmentFile=-/etc/default/coredns
 [Install]
 WantedBy=multi-user.target
 EOF
-		printf 'seeded %s\n' "$unit"
 	fi
 	envf=/etc/default/coredns
 	if [ ! -f "$envf" ]; then
@@ -267,39 +358,93 @@ EOF
 	fi
 }
 
-enable_service() {
-	systemctl daemon-reload
-	systemctl enable coredns.service
-	if [ "${UNBOUND:-}" = "1" ]; then
-		systemctl enable unbound.service 2>/dev/null || true
+service_active() {
+	if [ "$OS" = alpine ]; then
+		rc-service coredns status >/dev/null 2>&1
+	else
+		systemctl is-active --quiet coredns.service
 	fi
-	if [ "${START:-}" = "1" ]; then
-		if [ "${UNBOUND:-}" = "1" ]; then
-			systemctl restart unbound.service || systemctl start unbound.service
+}
+
+enable_service() {
+	if [ "$OS" = alpine ]; then
+		if want_unbound; then
+			rc-update add unbound default 2>/dev/null || true
 		fi
-		systemctl restart coredns.service || systemctl start coredns.service
+		rc-update add coredns default 2>/dev/null || true
+	else
+		systemctl daemon-reload
+		systemctl enable coredns.service
+		if want_unbound; then
+			systemctl enable unbound.service 2>/dev/null || true
+		fi
+	fi
+}
+
+restart_or_start() {
+	run=0
+	if [ "${START:-}" = "1" ]; then
+		run=1
+	fi
+	if [ -n "$UPDATE" ] && service_active; then
+		run=1
+	fi
+	[ "$run" = 1 ] || return 0
+	if [ "$OS" = alpine ]; then
+		if want_unbound; then
+			rc-service unbound restart || rc-service unbound start
+		fi
+		rc-service coredns restart || rc-service coredns start
+		return
+	fi
+	if want_unbound; then
+		systemctl restart unbound.service || systemctl start unbound.service
+	fi
+	systemctl restart coredns.service || systemctl start coredns.service
+}
+
+secret_hint() {
+	if [ "$OS" = alpine ]; then
+		printf '/etc/conf.d/coredns (use export VAR=)'
+	else
+		printf '/etc/default/coredns'
 	fi
 }
 
 need_root
-need_debian
+detect_os
+if already_installed; then
+	UPDATE=1
+	printf 'existing install at %s/bin/coredns\n' "$PREFIX"
+	"$PREFIX/bin/coredns" -version 2>/dev/null || true
+fi
 VERSION=$(resolve_version)
 export VERSION
+if [ -n "$UPDATE" ]; then
+	printf 'updating to %s (config left in place)\n' "$VERSION"
+else
+	printf 'installing %s on %s\n' "$VERSION" "$OS"
+fi
 ensure_pkgs
 ensure_user
 ensure_dirs
 write_unbound
 write_corefile
+write_service
 install_binary
-write_unit
 enable_service
-printf 'installed %s to %s/bin/coredns\n' "$VERSION" "$PREFIX"
-printf 'Corefile: %s/Corefile  unit: coredns.service\n' "$CONF_DIR"
-printf 'Admin UI: http://<host>:8080  user admin. Set COREDNS_ADMIN_BOOTSTRAP_PASSWORD in /etc/default/coredns before the first start.\n'
+restart_or_start
+printf 'binary %s at %s/bin/coredns\n' "$VERSION" "$PREFIX"
+printf 'Corefile: %s/Corefile\n' "$CONF_DIR"
+printf 'Admin UI: http://<host>:8080  user admin. Bootstrap password: %s\n' "$(secret_hint)"
 printf 'AXFR is localhost-only until you add secondary IPs in the UI.\n'
-if [ "${UNBOUND:-}" = "1" ]; then
+if want_unbound; then
 	printf 'Unbound recursion on :%s from private IPs; CoreDNS :53 recurses only for those clients.\n' "$UNBOUND_PORT"
 else
 	printf 'Recursion is off. UNBOUND=1 to seed Unbound and a private view.\n'
 fi
-printf 'Start: curl -fsSL %s | START=1 sh\n' "$INSTALLER"
+if [ -n "$UPDATE" ]; then
+	printf 'Re-run this script to replace the binary. Running services were restarted if they were already up.\n'
+else
+	printf 'Start: curl -fsSL %s | START=1 sh\n' "$INSTALLER"
+fi

@@ -19,31 +19,21 @@ Each tag matching an upstream CoreDNS version (for example `v1.14.7`) is CoreDNS
 
 Archives use the same names as [coredns/coredns](https://github.com/coredns/coredns/releases) (`coredns_<version>_<os>_<arch>.tgz`, plus `.zip` on Windows). Platforms match upstream except **linux/mips** and **linux/mips64le**: admin stores identity in `modernc.org/sqlite`, which has no port there.
 
-### Alpine (OpenRC)
+### Host (Alpine OpenRC or Debian/Ubuntu systemd)
 
 ```
-curl -fsSL https://raw.githubusercontent.com/skymoore/coredns-ez/main/scripts/install-alpine.sh | sudo sh
+curl -fsSL https://raw.githubusercontent.com/skymoore/coredns-ez/main/scripts/install.sh | sudo sh
 ```
 
-Pin a version and start:
+Pin a version and start now:
 
 ```
-curl -fsSL https://raw.githubusercontent.com/skymoore/coredns-ez/main/scripts/install-alpine.sh | sudo START=1 VERSION=v1.14.7 sh
+curl -fsSL https://raw.githubusercontent.com/skymoore/coredns-ez/main/scripts/install.sh | sudo START=1 VERSION=v1.14.7 sh
 ```
 
-Seeds Unbound on **:5353** (private clients only). CoreDNS on :53 serves UI-created zones to everyone and recurses **only** for private client IPs. Existing Corefile / unbound.conf / `/etc/conf.d/coredns` are left alone. Re-run after upgrades so `cap_net_bind_service` is restored. UI: `http://<host>:8080` user `admin`. Set `COREDNS_ADMIN_BOOTSTRAP_PASSWORD` in `/etc/conf.d/coredns` before the first start.
+Detects Alpine vs Debian/Ubuntu. Recursion (Unbound :5353, private clients only) is on for Alpine and off for Debian/Ubuntu unless `UNBOUND=1`. UI: `http://<host>:8080` user `admin`. Set `COREDNS_ADMIN_BOOTSTRAP_PASSWORD` in `/etc/conf.d/coredns` (Alpine, with `export`) or `/etc/default/coredns` (systemd) before the first start.
 
-### Debian / Ubuntu (systemd)
-
-```
-curl -fsSL https://raw.githubusercontent.com/skymoore/coredns-ez/main/scripts/install-systemd.sh | sudo sh
-```
-
-Authoritative DNS + UI on :8080; recursion off. Optional Unbound:
-
-```
-curl -fsSL https://raw.githubusercontent.com/skymoore/coredns-ez/main/scripts/install-systemd.sh | sudo UNBOUND=1 START=1 VERSION=v1.14.7 sh
-```
+Re-run the same command to **update**: replaces the binary, restores `cap_net_bind_service`, restarts CoreDNS if it is already running. Corefile, unbound.conf, and the service file are left alone.
 
 ### Docker
 
