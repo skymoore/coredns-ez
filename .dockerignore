@@ -1,7 +1,3 @@
 .git
-**/.git
-**/*_test.go
-**/*.test
-**/testdata
-*.md
-!integration-test/README.md
+admin/ui/node_modules
+**/node_modules

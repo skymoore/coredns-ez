@@ -114,6 +114,14 @@ jobs:
           echo "version=${VERSION}" >>"$GITHUB_OUTPUT"
           echo "Building CoreDNS ${TAG}"
 
+      - name: Set up Node
+        if: steps.info.outputs.skip != 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: admin/ui/package-lock.json
+
       - name: Prepare CoreDNS source
         if: steps.info.outputs.skip != 'true'
         id: src

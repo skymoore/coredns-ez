@@ -33,9 +33,9 @@ Do not configure `file`, `auto`, `dynupdate`, `secondary`, or `secondary-persist
 
 RFC 1995 incremental transfers for a zone owned by *dns-update-persistent*. Without it, that plugin uses CoreDNS's AXFR-style IXFR fallback. See [ixfr/README.md](ixfr/README.md).
 
-## api
+## admin
 
-HTTPS management plane on the DoH listener (`/dns-query` stays DoH; `/api/v1` is the JSON API). Runtime primary/secondary zones, OIDC + bearer auth, SQLite identity store, and cluster join so a secondary accepts the same credentials as the primary. See [api/README.md](api/README.md). Requires `patches/coredns-http-handler.patch` on the CoreDNS tree.
+HTTPS management plane on the DoH listener (`/dns-query` stays DoH; `/api/v1` is the JSON API; `/` is the embedded admin UI). Runtime primary/secondary zones, OIDC + bearer auth, SQLite identity store, and cluster join so a secondary accepts the same credentials as the primary. See [admin/README.md](admin/README.md). Requires `patches/coredns-http-handler.patch` on the CoreDNS tree. Build the UI with `make ui` before compiling CoreDNS.
 
 ## Integration tests
 

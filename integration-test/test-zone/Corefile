@@ -1,12 +1,17 @@
-# API + DoH on plain HTTP :8443 (no TLS terminator in this compose stack).
-# The catch-all `.` block serves API-created zones on :53; example.com stays
-# on dns-update-persistent and must not share that origin with api.
+# Admin plugin + DoH on plain HTTP :8443 (no TLS terminator in this compose stack).
+# The catch-all `.` block serves admin-created zones on :53; example.com stays
+# on dns-update-persistent and must not share that origin with admin.
+#
+# prometheus is first in every server block that answers DNS so the admin
+# dashboard sees coredns_dns_requests_total for UDP/TCP and DoH. :9153 is
+# the scrape listener (shared across blocks).
 https://.:8443 {
+	prometheus :9153
 	errors
 	log
-	api {
-		db /var/lib/coredns/api.sqlite
-		data /var/lib/coredns/api-zones
+	admin {
+		db /var/lib/coredns/admin.sqlite
+		data /var/lib/coredns/admin-zones
 		role primary
 		bootstrap_admin admin
 		advertise 172.30.53.10:53
@@ -17,7 +22,8 @@ https://.:8443 {
 }
 
 . {
-	api
+	prometheus :9153
+	admin
 	transfer {
 		to * 172.30.53.20
 	}
@@ -26,6 +32,7 @@ https://.:8443 {
 # Primary: dns-update-persistent owns example.com.
 # Do not also configure file, auto, secondary, or secondary-persistent here.
 example.com {
+	prometheus :9153
 	health :8080
 	errors
 	log

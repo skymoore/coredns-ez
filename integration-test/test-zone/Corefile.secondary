@@ -1,21 +1,24 @@
 https://.:8443 {
+	prometheus :9153
 	errors
 	log
-	api {
-		db /var/lib/coredns/api.sqlite
-		data /var/lib/coredns/api-zones
+	admin {
+		db /var/lib/coredns/admin.sqlite
+		data /var/lib/coredns/admin-zones
 		role secondary
 		dns 172.30.53.10:53
 	}
 }
 
 . {
-	api
+	prometheus :9153
+	admin
 }
 
 # Secondary: secondary-persistent transfers example.com from the primary
 # and writes the same RFC 1035 master after each successful AXFR/IXFR.
 example.com {
+	prometheus :9153
 	health :8080
 	errors
 	log

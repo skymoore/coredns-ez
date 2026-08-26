@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	SourceAPI      = "api"
+	SourceAdmin    = "admin"
 	SourceCorefile = "corefile"
 
 	KindPrimary   = "primary"

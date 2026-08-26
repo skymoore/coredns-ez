@@ -315,11 +315,11 @@ stage_bootstrap() {
 		fail "secondary file contains persist-probe"
 	fi
 
-	stage_api
+	stage_admin
 }
 
-stage_api() {
-	echo "-- API plugin on DoH :8443"
+stage_admin() {
+	echo "-- admin plugin on DoH :8443"
 	local code body token resp
 
 	resp=$(curl -sS -w '\n%{http_code}' "$API_PRIMARY/api/v1/health" || true)
@@ -330,6 +330,45 @@ stage_api() {
 	else
 		fail "GET $API_PRIMARY/api/v1/health" "code=$code body=$body"
 		return
+	fi
+
+	resp=$(curl -sS -w '\n%{http_code}' "$API_PRIMARY/" || true)
+	code=$(api_code "$resp")
+	body=$(api_body "$resp")
+	if [[ "$code" == "200" ]] && printf '%s' "$body" | grep -qi '<html'; then
+		pass "GET / is the admin UI HTML"
+	else
+		fail "GET / is the admin UI HTML" "code=$code"
+	fi
+
+	resp=$(curl -sS -w '\n%{http_code}' "$API_PRIMARY/zones" || true)
+	code=$(api_code "$resp")
+	if [[ "$code" == "200" ]] && printf '%s' "$(api_body "$resp")" | grep -qi '<html'; then
+		pass "GET /zones SPA fallback is HTML"
+	else
+		fail "GET /zones SPA fallback is HTML" "code=$code"
+	fi
+
+	local asset
+	asset=$(printf '%s' "$body" | sed -n 's/.*src="\(\/assets\/[^"]*\)".*/\1/p' | head -1)
+	if [[ -n "$asset" ]]; then
+		resp=$(curl -sS -w '\n%{http_code}' "$API_PRIMARY$asset" || true)
+		code=$(api_code "$resp")
+		if [[ "$code" == "200" ]]; then
+			pass "GET hashed UI asset $asset"
+		else
+			fail "GET hashed UI asset $asset" "code=$code"
+		fi
+	else
+		fail "GET hashed UI asset" "no /assets/ script in index.html"
+	fi
+
+	resp=$(curl -sS -w '\n%{http_code}' "$API_PRIMARY/api/v1" || true)
+	code=$(api_code "$resp")
+	if [[ "$code" == "200" ]] && printf '%s' "$(api_body "$resp")" | grep -q '"ui"'; then
+		pass "GET /api/v1 JSON index"
+	else
+		fail "GET /api/v1 JSON index" "code=$code body=$(api_body "$resp")"
 	fi
 
 	resp=$(curl -sS -w '\n%{http_code}' "$API_PRIMARY/api/v1/zones" || true)
@@ -346,6 +385,34 @@ stage_api() {
 	else
 		fail "POST /api/v1/auth/login on primary"
 		return
+	fi
+
+	resp=$(curl -sS -w '\n%{http_code}' "$METRICS_PRIMARY" || true)
+	code=$(api_code "$resp")
+	body=$(api_body "$resp")
+	if [[ "$code" == "200" ]] && printf '%s' "$body" | grep -q 'coredns_dns_requests_total'; then
+		pass "GET $METRICS_PRIMARY scrape has DNS request series"
+	else
+		fail "GET $METRICS_PRIMARY scrape has DNS request series" "code=$code"
+	fi
+
+	resp=$(curl -sS -w '\n%{http_code}' "$METRICS_SECONDARY" || true)
+	code=$(api_code "$resp")
+	body=$(api_body "$resp")
+	if [[ "$code" == "200" ]] && printf '%s' "$body" | grep -q 'coredns_dns_requests_total'; then
+		pass "GET $METRICS_SECONDARY scrape has DNS request series"
+	else
+		fail "GET $METRICS_SECONDARY scrape has DNS request series" "code=$code"
+	fi
+
+	resp=$(curl -sS -w '\n%{http_code}' "$API_PRIMARY/api/v1/metrics" \
+		-H "Authorization: Bearer $token")
+	code=$(api_code "$resp")
+	body=$(api_body "$resp")
+	if [[ "$code" == "200" ]] && printf '%s' "$body" | grep -q 'coredns_dns_requests_total'; then
+		pass "GET /api/v1/metrics includes coredns_dns_requests_total"
+	else
+		fail "GET /api/v1/metrics includes coredns_dns_requests_total" "code=$code body=$body"
 	fi
 
 	resp=$(curl -sS -w '\n%{http_code}' -X POST "$API_PRIMARY/api/v1/zones" \

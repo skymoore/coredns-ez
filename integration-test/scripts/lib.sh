@@ -19,6 +19,8 @@ API_PASS="${API_PASS:-integration-test-password}"
 API_ZONE="${API_ZONE:-it-api.example.}"
 API_OWNER="${API_OWNER:-www.it-api.example.}"
 API_ADDR="${API_ADDR:-192.0.2.99}"
+METRICS_PRIMARY="${METRICS_PRIMARY:-http://172.30.53.10:9153/metrics}"
+METRICS_SECONDARY="${METRICS_SECONDARY:-http://172.30.53.20:9153/metrics}"
 
 DIG_OPTS=(+time=2 +tries=2 +norecurse)
 

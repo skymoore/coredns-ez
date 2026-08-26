@@ -31,7 +31,7 @@ services:
     environment:
       ZONE_SEED: /zones/db.example.com
       ZONE_LIVE: /var/lib/coredns/db.example.com
-      COREDNS_API_BOOTSTRAP_PASSWORD: integration-test-password
+      COREDNS_ADMIN_BOOTSTRAP_PASSWORD: integration-test-password
     volumes:
       - ./test-zone/Corefile:/etc/coredns/Corefile:ro
       - ./test-zone/db.example.com:/zones/db.example.com:ro
@@ -41,6 +41,7 @@ services:
       - "1053:53/tcp"
       - "18080:8080"
       - "18443:8443"
+      - "19153:9153"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
       interval: 2s
@@ -62,6 +63,7 @@ services:
       - "1153:53/tcp"
       - "18081:8080"
       - "18444:8443"
+      - "19154:9153"
     depends_on:
       primary:
         condition: service_healthy
@@ -104,3 +106,5 @@ services:
       API_SECONDARY: http://172.30.53.20:8443
       API_USER: admin
       API_PASS: integration-test-password
+      METRICS_PRIMARY: http://172.30.53.10:9153/metrics
+      METRICS_SECONDARY: http://172.30.53.20:9153/metrics

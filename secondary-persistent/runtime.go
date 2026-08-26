@@ -13,7 +13,7 @@ import (
 	"github.com/skymoore/coredns-plugins/internal/zonereg"
 )
 
-const apiCatalog = "api"
+const adminCatalog = "admin"
 
 // NewWithDirectory returns an empty secondary engine that persists members
 // under dir. The API plugin owns one of these for cluster-synced zones.
@@ -52,7 +52,7 @@ func (s *SecondaryPersist) StartOrigin(origin string, from []string, x *transfer
 	s.Names = append(s.Names, origin)
 	s.zoneNames[z] = origin
 	shutdown := make(chan bool)
-	s.dynamicZones[origin] = &dynamicZone{catalog: apiCatalog, memberID: origin, shutdown: shutdown}
+	s.dynamicZones[origin] = &dynamicZone{catalog: adminCatalog, memberID: origin, shutdown: shutdown}
 	s.zoneMu.Unlock()
 
 	s.loadIfPresent(origin, z)
@@ -67,7 +67,7 @@ func (s *SecondaryPersist) StartOrigin(origin string, from []string, x *transfer
 func (s *SecondaryPersist) StopOrigin(origin string) error {
 	origin = strings.ToLower(dns.CanonicalName(origin))
 	s.zoneMu.Lock()
-	ok := s.removeDynamicZoneLocked(origin, apiCatalog)
+	ok := s.removeDynamicZoneLocked(origin, adminCatalog)
 	s.zoneMu.Unlock()
 	if !ok {
 		return fmt.Errorf("zone %s is not an API secondary", origin)

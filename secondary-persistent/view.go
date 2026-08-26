@@ -16,8 +16,8 @@ func (v *originView) Origin() string { return v.origin }
 func (v *originView) Source() string {
 	v.s.zoneMu.RLock()
 	defer v.s.zoneMu.RUnlock()
-	if dyn, ok := v.s.dynamicZones[v.origin]; ok && dyn.catalog == apiCatalog {
-		return zonereg.SourceAPI
+	if dyn, ok := v.s.dynamicZones[v.origin]; ok && dyn.catalog == adminCatalog {
+		return zonereg.SourceAdmin
 	}
 	return zonereg.SourceCorefile
 }

@@ -40,14 +40,14 @@ insert_plugins() {
       -e "/^dns-update-persistent:/a ixfr:${PLUGIN_MODULE}/ixfr" \
       "$cfg"
     sed -i \
-      -e "/^ixfr:/a api:${PLUGIN_MODULE}/api" \
+      -e "/^ixfr:/a admin:${PLUGIN_MODULE}/admin" \
       "$cfg"
   fi
-  if ! grep -q "^api:${PLUGIN_MODULE}/api\$" "$cfg"; then
+  if ! grep -q "^admin:${PLUGIN_MODULE}/admin\$" "$cfg"; then
     if grep -q '^ixfr:' "$cfg"; then
-      sed -i -e "/^ixfr:/a api:${PLUGIN_MODULE}/api" "$cfg"
+      sed -i -e "/^ixfr:/a admin:${PLUGIN_MODULE}/admin" "$cfg"
     else
-      sed -i -e "/^file:file\$/a api:${PLUGIN_MODULE}/api" "$cfg"
+      sed -i -e "/^file:file\$/a admin:${PLUGIN_MODULE}/admin" "$cfg"
     fi
   fi
   if ! grep -q "^secondary-persistent:${PLUGIN_MODULE}/secondary-persistent\$" "$cfg"; then
@@ -129,7 +129,14 @@ cmd_prepare() {
   tar -C "$plugins_dir" \
     --exclude .git \
     --exclude coredns \
+    --exclude node_modules \
+    --exclude admin/ui/node_modules \
     -cf - . | tar -C "$plugins_copy" -xf -
+
+  if [[ -f "${plugins_copy}/admin/ui/package.json" ]]; then
+    log "building admin UI"
+    (cd "${plugins_copy}/admin/ui" && npm ci && npm run build)
+  fi
 
   insert_plugins "${coredns_dir}/plugin.cfg"
   apply_coredns_patch "$coredns_dir" "${plugins_dir}/patches/coredns-http-handler.patch"
@@ -148,7 +155,7 @@ cmd_prepare() {
   log "coredns tag: $tag @ $coredns_commit"
   log "GITCOMMIT=$gitcommit"
   log "Go $go_version"
-  grep -nE 'file:|dns-update-persistent:|ixfr:|api:|secondary' "${coredns_dir}/plugin.cfg" || true
+  grep -nE 'file:|dns-update-persistent:|ixfr:|admin:|secondary' "${coredns_dir}/plugin.cfg" || true
 
   (
     cd "$coredns_dir"

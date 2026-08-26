@@ -26,7 +26,7 @@ func New(origin, seedPath string, mutable map[uint16]bool) (*UpdatePersist, erro
 		Zone:     origin,
 		seedPath: seedPath,
 		mutable:  mutable,
-		source:   zonereg.SourceAPI,
+		source:   zonereg.SourceAdmin,
 		rrs:      rrs,
 	}
 	if err := d.swap(rrs); err != nil {

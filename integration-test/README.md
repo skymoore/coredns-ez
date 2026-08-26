@@ -1,8 +1,8 @@
 # Integration tests
 
 Docker Compose stack that builds CoreDNS v1.14.7 with every default plugin plus
-`dns-update-persistent`, `ixfr`, `api`, and `secondary-persistent`, then
-exercises a real primary/secondary pair (DNS plus the HTTPS API on :8443).
+`dns-update-persistent`, `ixfr`, `admin`, and `secondary-persistent`, then
+exercises a real primary/secondary pair (DNS plus the HTTPS admin API on :8443).
 
 ```
 primary   172.30.53.10   dns-update-persistent   (RFC 2136 + in-place persist)
@@ -30,7 +30,12 @@ secondary to prove it serves its persisted copy.
 ```
 
 Host ports if you want to poke the stack yourself: primary `1053`, secondary
-`1153` (TCP and UDP), health `18080` / `18081`.
+`1153` (TCP and UDP), health `18080` / `18081`, Prometheus scrape `19153` /
+`19154`, admin UI/API `18443` / `18444`.
+
+`prometheus :9153` is first in every DNS server block (DoH, catch-all, and
+`example.com`) so the admin dashboard's in-process gatherer sees
+`coredns_dns_requests_total`.
 
 ```
 dig @127.0.0.1 -p 1053 www.example.com

@@ -1,16 +1,27 @@
 # syntax=docker/dockerfile:1
 #
 # Builds CoreDNS v1.14.7 with every default plugin plus the out-of-tree
-# plugins in this repo: dns-update-persistent, ixfr, api (after file),
+# plugins in this repo: dns-update-persistent, ixfr, admin (after file),
 # secondary-persistent (after secondary). A small CoreDNS patch lets the
-# DoH listener multiplex /api onto the same 443 port.
+# DoH listener multiplex the admin UI and /api/v1 onto the same 443 port.
 #
 # Build from the repository root:
 #   docker build -f integration-test/Dockerfile .
 
 ARG GO_IMAGE=golang:1.26
+ARG NODE_IMAGE=node:22-bookworm-slim
 ARG COREDNS_VERSION=v1.14.7
 ARG DEBIAN_IMAGE=debian:bookworm-slim
+
+# -----------------------------------------------------------------------------
+# Admin UI (embedded into the admin plugin).
+# -----------------------------------------------------------------------------
+FROM ${NODE_IMAGE} AS ui
+WORKDIR /ui
+COPY admin/ui/package.json admin/ui/package-lock.json ./
+RUN npm ci
+COPY admin/ui ./
+RUN npm run build
 
 # -----------------------------------------------------------------------------
 # Compile CoreDNS with both plugins.
@@ -34,7 +45,8 @@ COPY go.mod go.sum ./
 COPY dns-update-persistent ./dns-update-persistent
 COPY ixfr ./ixfr
 COPY secondary-persistent ./secondary-persistent
-COPY api ./api
+COPY admin ./admin
+COPY --from=ui /ui/dist ./admin/ui/dist
 COPY internal ./internal
 COPY patches ./patches
 
@@ -49,7 +61,7 @@ RUN sed -i \
     -e '/^dns-update-persistent:/a ixfr:github.com/skymoore/coredns-plugins/ixfr' \
     plugin.cfg \
     && sed -i \
-    -e '/^ixfr:/a api:github.com/skymoore/coredns-plugins/api' \
+    -e '/^ixfr:/a admin:github.com/skymoore/coredns-plugins/admin' \
     plugin.cfg \
     && sed -i \
     -e '/^secondary:secondary$/a secondary-persistent:github.com/skymoore/coredns-plugins/secondary-persistent' \
@@ -81,7 +93,7 @@ RUN chmod 0755 /entrypoint.sh /usr/bin/coredns
 
 # Integration tests rewrite bind-mounted persist files; run as root so the
 # volume owner does not have to match a distroless uid.
-EXPOSE 53 53/udp 8080 8443
+EXPOSE 53 53/udp 8080 8443 9153
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["-conf", "/etc/coredns/Corefile"]
 

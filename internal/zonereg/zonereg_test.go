@@ -18,7 +18,7 @@ func (f fakePrimary) Apply(_, _ []dns.RR) error { return nil }
 
 func TestRegisterConflictAndLookup(t *testing.T) {
 	t.Cleanup(ResetForTest)
-	p := fakePrimary{origin: "Example.COM.", source: SourceAPI, path: "/z/db.example.com"}
+	p := fakePrimary{origin: "Example.COM.", source: SourceAdmin, path: "/z/db.example.com"}
 	if err := RegisterPrimary(p); err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +30,7 @@ func TestRegisterConflictAndLookup(t *testing.T) {
 		t.Fatalf("lookup = %q %q", got, kind)
 	}
 	all := All()
-	if len(all) != 1 || all[0].Origin != "example.com." || all[0].Source != SourceAPI {
+	if len(all) != 1 || all[0].Origin != "example.com." || all[0].Source != SourceAdmin {
 		t.Fatalf("all = %+v", all)
 	}
 	Unregister("example.com.")
