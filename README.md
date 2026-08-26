@@ -17,7 +17,23 @@ The interesting one is **admin**: a management-plane plugin that multiplexes ont
 
 Archives use the same names as [coredns/coredns](https://github.com/coredns/coredns/releases) (`coredns_<version>_<os>_<arch>.tgz`, plus `.zip` on Windows). Platforms match upstream except **linux/mips** and **linux/mips64le**: admin stores identity in `modernc.org/sqlite`, which has no port there. Swap the binary in and add an `admin` block to the Corefile; see [admin/README.md](admin/README.md).
 
-Alpine (OpenRC): `sudo VERSION=v1.14.7 ./scripts/install-alpine.sh`. Re-run after every upgrade so `cap_net_bind_service` is restored. `START=1` also restarts the service. The script will not overwrite an existing Corefile or `/etc/conf.d/coredns`.
+### Alpine (OpenRC)
+
+Install the latest release (and Unbound) from GitHub:
+
+```
+curl -fsSL https://raw.githubusercontent.com/skymoore/coredns-plugins/main/scripts/install-alpine.sh | sudo sh
+```
+
+Pin a version and start the services:
+
+```
+curl -fsSL https://raw.githubusercontent.com/skymoore/coredns-plugins/main/scripts/install-alpine.sh | sudo START=1 VERSION=v1.14.7 sh
+```
+
+From a clone: `sudo ./scripts/install-alpine.sh` (same `VERSION` / `START` env). Re-run after every upgrade so `cap_net_bind_service` is restored.
+
+The installer seeds Unbound as a validating recursive resolver on UDP/TCP **:5353**, allowed only from private addresses (RFC1918, ULA, loopback, link-local, CGNAT). A missing Corefile forwards `.` to `127.0.0.1:5353` so CoreDNS on :53 can recurse for those clients without becoming an open resolver on Unbound’s port. Existing Corefile, unbound.conf (once seeded), and `/etc/conf.d/coredns` are left alone. Set `export COREDNS_ADMIN_BOOTSTRAP_PASSWORD=...` in `/etc/conf.d/coredns` before the first start.
 
 The Release workflow (`.github/workflows/release.yml`) builds the SPA, injects the plugins, and publishes on `workflow_dispatch` or when a new upstream CoreDNS release appears.
 

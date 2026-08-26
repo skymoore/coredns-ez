@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canHaveMultipleValues, groupRecords, sortRecordSets, typesInSets } from "./rrset";
+import { aclsInSets, canHaveMultipleValues, groupRecords, sortRecordSets, typesInSets } from "./rrset";
 import type { DnsRecord } from "./types";
 
 describe("groupRecords", () => {
@@ -50,6 +50,34 @@ describe("typesInSets", () => {
       { name: "b.example.com.", type: "A", ttl: 60, rdata: "192.0.2.2" },
     ]);
     expect(typesInSets(sets)).toEqual(["A", "TXT"]);
+  });
+});
+
+describe("aclsInSets", () => {
+  it("is only public when no custom ACLs are used", () => {
+    const sets = groupRecords([
+      { name: "a.example.com.", type: "A", ttl: 60, rdata: "192.0.2.1" },
+      { name: "b.example.com.", type: "TXT", ttl: 60, rdata: "x" },
+    ]);
+    expect(aclsInSets(sets)).toEqual(["public"]);
+  });
+
+  it("lists only ACLs that appear on records, public first", () => {
+    const sets = groupRecords([
+      { name: "www.example.com.", type: "A", ttl: 60, rdata: "10.1.2.3", acl: "internal" },
+      { name: "www.example.com.", type: "A", ttl: 60, rdata: "192.0.2.10" },
+      { name: "vpn.example.com.", type: "A", ttl: 60, rdata: "10.9.9.9", acl: "office" },
+    ]);
+    expect(aclsInSets(sets)).toEqual(["public", "internal", "office"]);
+  });
+
+  it("omits public when every record has a custom ACL", () => {
+    const sets = groupRecords([{ name: "www.example.com.", type: "A", ttl: 60, rdata: "10.1.2.3", acl: "internal" }]);
+    expect(aclsInSets(sets)).toEqual(["internal"]);
+  });
+
+  it("is only public on an empty zone", () => {
+    expect(aclsInSets([])).toEqual(["public"]);
   });
 });
 

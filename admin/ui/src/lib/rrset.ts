@@ -98,6 +98,23 @@ export function typesInSets(sets: DnsRecordSet[]): string[] {
   });
 }
 
+export function aclName(acl?: string): string {
+  const n = (acl ?? "").trim().toLowerCase();
+  return n === "" || n === "public" ? "public" : n;
+}
+
+/** ACLs that appear on records in this zone. Empty zone => public only. */
+export function aclsInSets(sets: DnsRecordSet[]): string[] {
+  if (sets.length === 0) return ["public"];
+  const names = new Set<string>();
+  for (const s of sets) names.add(aclName(s.acl));
+  return [...names].sort((a, b) => {
+    if (a === "public") return -1;
+    if (b === "public") return 1;
+    return a.localeCompare(b);
+  });
+}
+
 export function setMatchesFilter(set: DnsRecordSet, origin: string, q: string, relativeOwner: (fqdn: string, origin: string) => string): boolean {
   const n = q.trim().toLowerCase();
   if (!n) return true;

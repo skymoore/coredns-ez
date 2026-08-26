@@ -9,6 +9,8 @@ import {
   setMatchesFilter,
   sortRecordSets,
   typesInSets,
+  aclsInSets,
+  aclName,
   type DnsRecordSet,
   type SortCol,
   type SortDir,
@@ -27,6 +29,7 @@ export function RecordTable({ origin, records, canWrite }: { origin: string; rec
   const qc = useQueryClient();
   const [q, setQ] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
+  const [aclFilter, setAclFilter] = useState("all");
   const [sort, setSort] = useState<{ col: SortCol; dir: SortDir }>({ col: "name", dir: "asc" });
   const [del, setDel] = useState<DnsRecordSet | null>(null);
   const [edit, setEdit] = useState<DnsRecordSet | null>(null);
@@ -35,13 +38,21 @@ export function RecordTable({ origin, records, canWrite }: { origin: string; rec
     () => [{ value: "all", label: "All types" }, ...typesInSets(sets).map((t) => ({ value: t, label: t }))],
     [sets],
   );
+  const usedAcls = useMemo(() => aclsInSets(sets), [sets]);
+  const aclOptions = useMemo(() => {
+    const opts = usedAcls.map((a) => ({ value: a, label: a }));
+    if (usedAcls.length > 1) return [{ value: "all", label: "All ACLs" }, ...opts];
+    return opts;
+  }, [usedAcls]);
+  const aclValue = aclOptions.some((o) => o.value === aclFilter) ? aclFilter : (aclOptions[0]?.value ?? "public");
   const filtered = useMemo(() => {
     const rows = sets.filter((s) => {
       if (typeFilter !== "all" && s.type !== typeFilter) return false;
+      if (aclValue !== "all" && aclName(s.acl) !== aclValue) return false;
       return setMatchesFilter(s, origin, q, relativeOwner);
     });
     return sortRecordSets(rows, sort.col, sort.dir, origin, relativeOwner);
-  }, [sets, origin, q, typeFilter, sort]);
+  }, [sets, origin, q, typeFilter, aclValue, sort]);
   const onSort = (col: SortCol) => {
     setSort((cur) => (cur.col === col ? { col, dir: cur.dir === "asc" ? "desc" : "asc" } : { col, dir: "asc" }));
   };
@@ -73,6 +84,13 @@ export function RecordTable({ origin, records, canWrite }: { origin: string; rec
           onValueChange={setTypeFilter}
           options={typeOptions}
           placeholder="Type"
+          className="w-40"
+        />
+        <Select
+          value={aclValue}
+          onValueChange={setAclFilter}
+          options={aclOptions}
+          placeholder="ACL"
           className="w-40"
         />
       </div>
