@@ -41,6 +41,10 @@ func (a *Admin) routes() http.Handler {
 			r.Get("/audit", requireRole(store.RoleViewer, a.handleAudit))
 			r.Get("/openapi.json", a.handleOpenAPI)
 
+			r.Get("/backup", requireRole(store.RoleOperator, a.handleBackup))
+			r.Get("/update", requireRole(store.RoleViewer, a.handleUpdateStatus))
+			r.Post("/update", requireRole(store.RoleAdmin, a.handleUpdateApply))
+
 			r.Get("/users", requireRole(store.RoleAdmin, a.handleListUsers))
 			r.Post("/users", requireRole(store.RoleAdmin, a.handleCreateUser))
 			r.Get("/users/{id}", requireRole(store.RoleAdmin, a.handleGetUser))
@@ -154,5 +158,6 @@ func (a *Admin) handleNode(w http.ResponseWriter, _ *http.Request) {
 		"cluster_id":    clusterID,
 		"advertise_dns": adv,
 		"generation":    a.db.Generation(),
+		"version":       coreVersion(),
 	})
 }

@@ -12,8 +12,9 @@ import {
 } from "@phosphor-icons/react";
 import icon from "@/assets/brand/coredns-icon.svg";
 import { cn } from "@/lib/cn";
+import { Badge } from "@/components/ui/badge";
 import { hasRole } from "@/lib/roles";
-import type { Actor, NodeInfo } from "@/lib/types";
+import type { Actor, NodeInfo, UpdateInfo } from "@/lib/types";
 
 const items = [
   { to: "/", label: "Dashboard", icon: Gauge, need: "viewer" as const },
@@ -27,7 +28,17 @@ const items = [
   { to: "/settings", label: "Settings", icon: Gear, need: "viewer" as const },
 ];
 
-export function Sidebar({ me, node, onNavigate }: { me: Actor; node?: NodeInfo; onNavigate?: () => void }) {
+export function Sidebar({
+  me,
+  node,
+  update,
+  onNavigate,
+}: {
+  me: Actor;
+  node?: NodeInfo;
+  update?: UpdateInfo;
+  onNavigate?: () => void;
+}) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   return (
     <nav className="flex h-full flex-col">
@@ -58,6 +69,11 @@ export function Sidebar({ me, node, onNavigate }: { me: Actor; node?: NodeInfo; 
                 >
                   <Icon size={18} weight={active ? "bold" : "regular"} />
                   {i.label}
+                  {i.to === "/settings" && update?.available ? (
+                    <Badge tone="warning" className="ml-auto px-1.5 py-0 text-[10px]">
+                      update
+                    </Badge>
+                  ) : null}
                 </Link>
               </li>
             );

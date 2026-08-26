@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Toaster } from "sonner";
 import { api } from "@/lib/api";
-import type { Actor, NodeInfo } from "@/lib/types";
+import type { Actor, NodeInfo, UpdateInfo } from "@/lib/types";
 import { Sidebar } from "./sidebar";
 import { Topbar } from "./topbar";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
@@ -14,14 +14,20 @@ export function AppShell({ me }: { me: Actor }) {
     queryKey: ["node"],
     queryFn: () => api<NodeInfo>("/node"),
   });
+  const upd = useQuery({
+    queryKey: ["update"],
+    queryFn: () => api<UpdateInfo>("/update"),
+    refetchInterval: 15 * 60 * 1000,
+    retry: false,
+  });
   return (
     <div className="flex min-h-[100dvh] bg-background">
       <aside className="hidden w-60 shrink-0 border-r border-border bg-sidebar p-3 lg:block">
-        <Sidebar me={me} node={node.data} />
+        <Sidebar me={me} node={node.data} update={upd.data} />
       </aside>
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent>
-          <Sidebar me={me} node={node.data} onNavigate={() => setOpen(false)} />
+          <Sidebar me={me} node={node.data} update={upd.data} onNavigate={() => setOpen(false)} />
         </SheetContent>
       </Sheet>
       <div className="flex min-w-0 flex-1 flex-col">

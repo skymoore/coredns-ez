@@ -52,9 +52,13 @@ on Debian/Ubuntu unless `UNBOUND=1`. Pin and start:
 curl -fsSL …/scripts/install.sh | sudo START=1 VERSION=v1.14.7 UNBOUND=1 sh
 ```
 
-Re-run to replace the binary and restore `cap_net_bind_service`. If CoreDNS is
-already running it is restarted. Corefile, unbound.conf, and the unit/OpenRC
-file are not overwritten.
+Re-run to replace `/var/lib/coredns/coredns` and restore `cap_net_bind_service`.
+If CoreDNS is already running it is restarted. Corefile and unbound.conf are
+not overwritten. The unit/OpenRC file is rewritten if it still launches
+`/usr/local/bin/coredns` or does not supervise a clean exit — that layout is
+what Settings → Backup and Settings → Update need (`coredns` owns the data
+dir and can replace the binary; systemd `Restart=always` / OpenRC
+`supervise-daemon` bring `cap_net_bind_service` back).
 
 ## TLS
 
@@ -90,12 +94,18 @@ This build does not run ACME.
 
 ## Backup
 
+Settings → Backup (operator+) downloads a zip of sqlite, `zones/`, Corefile,
+and `tls/` beside the Corefile. The installer makes `/etc/coredns` and
+`/var/lib/coredns` owned by `coredns` so that path is readable at runtime.
+
 Stop CoreDNS, or checkpoint sqlite, then copy **both** trees.
 
 | What | Docker / default install |
 |---|---|
 | Identity (users, tokens, TSIG, ACLs, filters, cluster, zone inventory) | `/var/lib/coredns/admin.sqlite` and `-wal`/`-shm` if present |
 | Zone files and IXFR journals | `/var/lib/coredns/zones/` (host install: Corefile `data`) |
+| Corefile and TLS material | `/etc/coredns/Corefile`, `/etc/coredns/tls/` |
+| Binary (host install) | `/var/lib/coredns/coredns` (`/usr/local/bin/coredns` is a symlink) |
 
 ```
 sqlite3 /var/lib/coredns/admin.sqlite 'PRAGMA wal_checkpoint(TRUNCATE);'
@@ -110,11 +120,19 @@ RRs do not.
 Tags follow **upstream CoreDNS** (`v1.14.7`). Plugins and UI ride along. Sqlite
 schema changes are additive.
 
+- Settings → Update (admin, linux): downloads the latest GitHub release,
+  checks the sha256, writes `/var/lib/coredns/coredns`, and exits so the
+  supervisor restarts with `cap_net_bind_service`. The UI offers a backup
+  first. Re-run `install.sh` once on any host that still has the binary in
+  `/usr/local/bin` — that directory is not writable by `coredns`.
 - Docker: `docker pull ghcr.io/skymoore/coredns-ez:<tag>` and recreate the
-  container with the **same volume**.
+  container with the **same volume**. In-UI update rewrites `/usr/bin/coredns`
+  in the container layer (root); prefer a pull. Use `--restart unless-stopped`
+  (compose already does).
 - Host: re-run `scripts/install.sh` (same curl line as install). It replaces
-  the binary, restores `cap_net_bind_service`, and restarts CoreDNS if it is
-  already running. Corefile, unbound.conf, and the unit file stay put.
+  the binary, restores `cap_net_bind_service`, refreshes the unit if needed,
+  and restarts CoreDNS if it is already running. Corefile and unbound.conf
+  stay put.
 
 A new CoreDNS minor is released only if `patches/coredns-http-handler.patch`
 applies. linux/mips and linux/mips64le are omitted (`modernc.org/sqlite`). Do

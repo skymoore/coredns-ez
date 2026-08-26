@@ -103,6 +103,8 @@ Authenticated JSON for the UI:
 * `GET|POST /api/v1/tsig-keys`, `DELETE /api/v1/tsig-keys/{id}` HMAC keys for nsupdate / signed transfers
 * Filters: `GET /api/v1/filters`; `POST/DELETE /api/v1/filters/rules`; URL lists at `POST /api/v1/filters/feeds` with `sync` `periodic` (refresh on an interval) or `once` (import now, do not refresh). Blocked names that are not in an admin-owned zone are NXDOMAIN. Allow wins. `example.com` matches itself and subdomains; `*.example.com` matches subdomains only.
 * `GET|PUT /api/v1/transfer` extra AXFR IPs (unioned with Corefile `transfer { to }`). IPs only; `*` is rejected. Cluster join appends the secondary DNS address.
+* `GET /api/v1/backup` zip of sqlite, zone files, Corefile, and tls (operator+). Host install puts those trees in `/etc/coredns` and `/var/lib/coredns` owned by `coredns`.
+* `GET|POST /api/v1/update` GitHub release check / self-update (POST is admin; linux only). The running binary’s directory must be writable (`install.sh` places it at `/var/lib/coredns/coredns` and supervises a clean exit so bind capability is restored).
 * Cluster: on the primary, **Add a secondary** mints a one-time join key. On a new `role secondary` instance, Cluster → paste primary URL + key. Identity (users, tokens, TSIG keys, zone list) replicates; zone data is AXFRed from `advertise`.
 
 Zone transfers (AXFR/IXFR) are **not** gated by the admin login. The CoreDNS `transfer` plugin allows AXFR from every address in `transfer { to ... }` plus extra IPs from `PUT /api/v1/transfer`. `to *` means anyone who can reach the DNS port can copy the zone. Product Corefiles use `to 127.0.0.1` only. TSIG is not required for AXFR unless the Corefile `tsig` plugin has `require AXFR`.

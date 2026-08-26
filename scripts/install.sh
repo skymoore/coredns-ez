@@ -6,9 +6,14 @@
 #   curl -fsSL … | sudo START=1 VERSION=v1.14.7 sh
 # Recursion: default on Alpine; on Debian/Ubuntu pass UNBOUND=1.
 #
-# Re-run to replace the binary, restore cap_net_bind_service, and restart
-# if CoreDNS is already running. Does not overwrite Corefile, unbound.conf,
-# or the service file once they exist.
+# Re-run to replace the binary in $LIB_DIR, refresh the OpenRC/systemd unit if
+# it still points at $PREFIX/bin, restore cap_net_bind_service, and restart if
+# CoreDNS is already running. Corefile and unbound.conf are left in place.
+#
+# The real binary lives in $LIB_DIR (owned by $USER_NAME) so Settings → Backup
+# can read sqlite/zones/Corefile/tls and Settings → Update can swap the binary.
+# systemd Restart=always / OpenRC supervise-daemon then start the new file with
+# bind capability. $PREFIX/bin/coredns is a symlink for PATH.
 set -eu
 
 REPO="${REPO:-skymoore/coredns-ez}"
@@ -21,6 +26,7 @@ UNBOUND_PORT="${UNBOUND_PORT:-5353}"
 INSTALLER="https://raw.githubusercontent.com/${REPO}/main/scripts/install.sh"
 OS=""
 UPDATE=""
+WAS_RUNNING=""
 
 die() { printf '%s\n' "$*" >&2; exit 1; }
 
@@ -97,7 +103,8 @@ want_unbound() {
 }
 
 already_installed() {
-	[ -x "${PREFIX}/bin/coredns" ] && [ -f "${CONF_DIR}/Corefile" ]
+	[ -f "${CONF_DIR}/Corefile" ] || return 1
+	[ -x "${LIB_DIR}/coredns" ] || [ -x "${PREFIX}/bin/coredns" ]
 }
 
 ensure_pkgs() {
@@ -133,6 +140,7 @@ ensure_user() {
 ensure_dirs() {
 	mkdir -p "$CONF_DIR/zones" "$CONF_DIR/tls" "$CONF_DIR/keys" "$LIB_DIR/zones"
 	chown -R "$USER_NAME:$USER_NAME" "$CONF_DIR" "$LIB_DIR"
+	chmod 0750 "$CONF_DIR" "$LIB_DIR"
 }
 
 install_binary() {
@@ -146,12 +154,17 @@ install_binary() {
 	fi
 	tar -xzf "$tmp/${base}.tgz" -C "$tmp"
 	[ -x "$tmp/coredns" ] || die "archive missing coredns binary"
-	install -m 0755 "$tmp/coredns" "$PREFIX/bin/coredns"
+	install -o "$USER_NAME" -g "$USER_NAME" -m 0755 "$tmp/coredns" "${LIB_DIR}/coredns"
 	rm -rf "$tmp"
-	setcap "$BIND_CAP" "$PREFIX/bin/coredns"
-	getcap "$PREFIX/bin/coredns" | grep -q cap_net_bind_service \
+	setcap "$BIND_CAP" "${LIB_DIR}/coredns"
+	getcap "${LIB_DIR}/coredns" | grep -q cap_net_bind_service \
 		|| die "setcap failed; is libcap installed?"
-	"$PREFIX/bin/coredns" -version
+	mkdir -p "${PREFIX}/bin"
+	if [ -e "${PREFIX}/bin/coredns" ] && [ ! -L "${PREFIX}/bin/coredns" ]; then
+		rm -f "${PREFIX}/bin/coredns"
+	fi
+	ln -sfn "${LIB_DIR}/coredns" "${PREFIX}/bin/coredns"
+	"${LIB_DIR}/coredns" -version
 }
 
 lan_view() {
@@ -281,23 +294,48 @@ EOF
 	printf 'seeded %s\n' "$corefile"
 }
 
-write_service() {
+service_layout_ok() {
 	if [ "$OS" = alpine ]; then
-		initd=/etc/init.d/coredns
+		[ -f /etc/init.d/coredns ] || return 1
+		grep -q 'supervisor=supervise-daemon' /etc/init.d/coredns || return 1
+		grep -Fq "${LIB_DIR}/coredns" /etc/init.d/coredns
+		return
+	fi
+	[ -f /etc/systemd/system/coredns.service ] || return 1
+	grep -q '^Restart=always' /etc/systemd/system/coredns.service || return 1
+	grep -Fq "${LIB_DIR}/coredns" /etc/systemd/system/coredns.service
+}
+
+stop_service() {
+	if [ "$OS" = alpine ]; then
+		rc-service coredns stop || true
+	else
+		systemctl stop coredns.service || true
+	fi
+}
+
+write_openrc() {
+	initd=/etc/init.d/coredns
+	if [ -f "$initd" ] && grep -q 'supervisor=supervise-daemon' "$initd" && grep -Fq "${LIB_DIR}/coredns" "$initd"; then
+		printf 'keep existing %s\n' "$initd"
+	else
 		if [ -f "$initd" ]; then
-			printf 'keep existing %s\n' "$initd"
-		else
-			cat >"$initd" <<EOF
+			cp -a "$initd" "${initd}.bak"
+			printf 'refreshing %s so Settings → Update can replace %s/coredns\n' "$initd" "$LIB_DIR"
+		fi
+		cat >"$initd" <<EOF
 #!/sbin/openrc-run
 
 name="CoreDNS"
 description="CoreDNS (skymoore/coredns-ez)"
-command="${PREFIX}/bin/coredns"
+supervisor=supervise-daemon
+command="${LIB_DIR}/coredns"
 command_args="-conf ${CONF_DIR}/Corefile"
 command_user="${USER_NAME}:${USER_NAME}"
-command_background=yes
+directory="${LIB_DIR}"
 pidfile="/run/coredns.pid"
 capabilities="^cap_net_bind_service"
+respawn_delay=2
 
 depend() {
 	need net
@@ -306,24 +344,29 @@ depend() {
 	provide dns
 }
 EOF
-			chmod 755 "$initd"
-		fi
-		confd=/etc/conf.d/coredns
-		if [ ! -f "$confd" ]; then
-			cat >"$confd" <<'EOF'
+		chmod 755 "$initd"
+	fi
+	confd=/etc/conf.d/coredns
+	if [ ! -f "$confd" ]; then
+		cat >"$confd" <<'EOF'
 # OpenRC sources this file but does not export it. Prefix every secret with export.
 # export COREDNS_ADMIN_BOOTSTRAP_PASSWORD=''
 # export COREDNS_OIDC_CLIENT_SECRET=''
 EOF
-			chown "$USER_NAME:$USER_NAME" "$confd"
-			chmod 640 "$confd"
-		fi
-		return
+		chown "$USER_NAME:$USER_NAME" "$confd"
+		chmod 640 "$confd"
 	fi
+}
+
+write_systemd() {
 	unit=/etc/systemd/system/coredns.service
-	if [ -f "$unit" ]; then
+	if [ -f "$unit" ] && grep -q '^Restart=always' "$unit" && grep -Fq "${LIB_DIR}/coredns" "$unit"; then
 		printf 'keep existing %s\n' "$unit"
 	else
+		if [ -f "$unit" ]; then
+			cp -a "$unit" "${unit}.bak"
+			printf 'refreshing %s so Settings → Update can replace %s/coredns\n' "$unit" "$LIB_DIR"
+		fi
 		cat >"$unit" <<EOF
 [Unit]
 Description=CoreDNS (skymoore/coredns-ez)
@@ -335,11 +378,12 @@ Wants=network-online.target
 Type=simple
 User=${USER_NAME}
 Group=${USER_NAME}
-ExecStart=${PREFIX}/bin/coredns -conf ${CONF_DIR}/Corefile
+WorkingDirectory=${LIB_DIR}
+ExecStart=${LIB_DIR}/coredns -conf ${CONF_DIR}/Corefile
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 NoNewPrivileges=true
-Restart=on-failure
+Restart=always
 RestartSec=2
 EnvironmentFile=-/etc/default/coredns
 
@@ -356,6 +400,14 @@ EOF
 		chown "$USER_NAME:$USER_NAME" "$envf"
 		chmod 640 "$envf"
 	fi
+}
+
+write_service() {
+	if [ "$OS" = alpine ]; then
+		write_openrc
+		return
+	fi
+	write_systemd
 }
 
 service_active() {
@@ -386,7 +438,7 @@ restart_or_start() {
 	if [ "${START:-}" = "1" ]; then
 		run=1
 	fi
-	if [ -n "$UPDATE" ] && service_active; then
+	if [ -n "$WAS_RUNNING" ]; then
 		run=1
 	fi
 	[ "$run" = 1 ] || return 0
@@ -415,8 +467,13 @@ need_root
 detect_os
 if already_installed; then
 	UPDATE=1
-	printf 'existing install at %s/bin/coredns\n' "$PREFIX"
-	"$PREFIX/bin/coredns" -version 2>/dev/null || true
+	if [ -x "${LIB_DIR}/coredns" ]; then
+		printf 'existing install at %s/coredns\n' "$LIB_DIR"
+		"${LIB_DIR}/coredns" -version 2>/dev/null || true
+	else
+		printf 'existing install at %s/bin/coredns\n' "$PREFIX"
+		"${PREFIX}/bin/coredns" -version 2>/dev/null || true
+	fi
 fi
 VERSION=$(resolve_version)
 export VERSION
@@ -428,15 +485,23 @@ fi
 ensure_pkgs
 ensure_user
 ensure_dirs
+if service_active; then
+	WAS_RUNNING=1
+fi
 write_unbound
 write_corefile
+if [ -n "$WAS_RUNNING" ] && ! service_layout_ok; then
+	printf 'stopping CoreDNS to migrate the service onto %s/coredns (required for Settings → Update)\n' "$LIB_DIR"
+	stop_service
+fi
 write_service
 install_binary
 enable_service
 restart_or_start
-printf 'binary %s at %s/bin/coredns\n' "$VERSION" "$PREFIX"
+printf 'binary %s at %s/coredns (symlink %s/bin/coredns)\n' "$VERSION" "$LIB_DIR" "$PREFIX"
 printf 'Corefile: %s/Corefile\n' "$CONF_DIR"
 printf 'Admin UI: http://<host>:8080  user admin. Bootstrap password: %s\n' "$(secret_hint)"
+printf 'Settings → Backup and Settings → Update work against this layout.\n'
 printf 'AXFR is localhost-only until you add secondary IPs in the UI.\n'
 if want_unbound; then
 	printf 'Unbound recursion on :%s from private IPs; CoreDNS :53 recurses only for those clients.\n' "$UNBOUND_PORT"

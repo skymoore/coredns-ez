@@ -20,8 +20,10 @@ func (a *Admin) maybeProxy(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		// Cluster apply is local on a secondary.
-		if strings.HasPrefix(r.URL.Path, "/api/v1/cluster/snapshot") {
+		// Cluster apply, backup, and self-update stay on this node.
+		if strings.HasPrefix(r.URL.Path, "/api/v1/cluster/snapshot") ||
+			strings.HasPrefix(r.URL.Path, "/api/v1/backup") ||
+			strings.HasPrefix(r.URL.Path, "/api/v1/update") {
 			next.ServeHTTP(w, r)
 			return
 		}

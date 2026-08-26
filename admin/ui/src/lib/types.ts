@@ -21,6 +21,15 @@ export type NodeInfo = {
   cluster_id: string;
   advertise_dns: string;
   generation: number;
+  version?: string;
+};
+
+export type UpdateInfo = {
+  current: string;
+  latest: string;
+  available: boolean;
+  published_at?: string;
+  error?: string;
 };
 
 export type Zone = {

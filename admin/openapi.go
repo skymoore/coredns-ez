@@ -33,6 +33,8 @@ const openAPIJSON = `{
     "/api/v1/filters/feeds": {"post": {"summary": "Add a URL list (periodic sync or one-time import)"}},
     "/api/v1/filters/feeds/{id}": {"patch": {"summary": "Update a URL list"}, "delete": {"summary": "Remove a URL list and its entries"}},
     "/api/v1/filters/feeds/{id}/sync": {"post": {"summary": "Fetch a URL list now"}},
+    "/api/v1/backup": {"get": {"summary": "Download a zip of sqlite, zone files, and Corefile"}},
+    "/api/v1/update": {"get": {"summary": "Latest GitHub release vs this binary"}, "post": {"summary": "Install the latest GitHub release and restart"}},
     "/api/v1/metrics": {"get": {"summary": "Curated in-process Prometheus snapshot"}},
     "/api/v1/audit": {"get": {"summary": "Recent audit rows"}}
   }
