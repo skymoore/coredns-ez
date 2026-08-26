@@ -25,8 +25,13 @@ Secondaries replicate password/token hashes so the same credentials work on
 both nodes. Record mutations on a secondary are proxied to the primary.
 
 Do not stack *file*, *auto*, *dynupdate*, *secondary*, *secondary-persistent*,
-or *dns-update-persistent* on an origin the admin plugin owns. Corefile-static zones
-still register and appear in `GET /api/v1/zones`.
+or *dns-update-persistent* on an origin the admin plugin owns.
+
+Only zones that register in `zonereg` appear in the UI (`GET /api/v1/zones`):
+admin-created zones, *dns-update-persistent*, and *secondary-persistent*.
+The in-tree *file* plugin does **not** register. A Corefile `file` zone still
+answers DNS queries but will not show up in the dashboard. Convert it to
+*dns-update-persistent* (or create it through the API) to manage it here.
 
 ## Syntax
 

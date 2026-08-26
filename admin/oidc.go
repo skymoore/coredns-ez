@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -131,7 +132,19 @@ func (a *Admin) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		Name: sessionCookie, Value: jwtTok, Path: "/", Expires: exp,
 		HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteLaxMode,
 	})
-	writeJSON(w, http.StatusOK, map[string]any{"token": jwtTok, "expires_at": exp.Unix(), "user": actor})
+	// Authentik (and every other IdP) lands the browser on this URL. JSON
+	// here is a dead end; send humans to the UI. API clients that ask for
+	// JSON still get the token body.
+	if wantsJSON(r) {
+		writeJSON(w, http.StatusOK, map[string]any{"token": jwtTok, "expires_at": exp.Unix(), "user": actor})
+		return
+	}
+	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+func wantsJSON(r *http.Request) bool {
+	a := r.Header.Get("Accept")
+	return strings.Contains(a, "application/json") && !strings.Contains(a, "text/html")
 }
 
 func randomHex(n int) (string, error) {
