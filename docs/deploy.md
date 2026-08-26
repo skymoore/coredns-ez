@@ -52,6 +52,11 @@ on Debian/Ubuntu unless `UNBOUND=1`. Pin and start:
 curl -fsSL …/scripts/install.sh | sudo START=1 VERSION=v1.14.7 UNBOUND=1 sh
 ```
 
+First start writes `COREDNS_ADMIN_BOOTSTRAP_PASSWORD` if unset (Alpine must
+`export` it in `/etc/conf.d/coredns`; systemd uses `/etc/default/coredns`).
+The Corefile `transfer` block must be multi-line; `transfer { to 127.0.0.1 }`
+on one line is parsed as an extra address `}` and CoreDNS exits 1.
+
 Re-run to replace `/var/lib/coredns/coredns` and restore `cap_net_bind_service`.
 If CoreDNS is already running it is restarted. Corefile and unbound.conf are
 not overwritten. The unit/OpenRC file is rewritten if it still launches

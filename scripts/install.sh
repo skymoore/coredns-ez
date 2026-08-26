@@ -27,6 +27,8 @@ INSTALLER="https://raw.githubusercontent.com/${REPO}/main/scripts/install.sh"
 OS=""
 UPDATE=""
 WAS_RUNNING=""
+GENERATED_BOOTSTRAP=""
+BOOTSTRAP_PW=""
 
 die() { printf '%s\n' "$*" >&2; exit 1; }
 
@@ -235,10 +237,48 @@ EOF
 	printf 'seeded %s (recursion on :%s from private IPs)\n' "$conf" "$UNBOUND_PORT"
 }
 
+# CoreDNS transfer treats every token after `to` as an address, including a
+# closing `}` on the same line. Always write a block.
+transfer_block() {
+	indent=$1
+	printf '%stransfer {\n%s\tto 127.0.0.1\n%s}\n' "$indent" "$indent" "$indent"
+}
+
+# Rewrite `transfer { to ... }` one-liners in an already-seeded Corefile.
+fix_oneline_transfer() {
+	corefile="${CONF_DIR}/Corefile"
+	[ -f "$corefile" ] || return 0
+	grep -q 'transfer { to ' "$corefile" || return 0
+	tmp="$(mktemp)"
+	awk '
+		{
+			if ($0 ~ /transfer \{ to .*\}/) {
+				indent = $0
+				sub(/transfer.*/, "", indent)
+				line = $0
+				sub(/^[[:space:]]*transfer \{ to /, "", line)
+				sub(/\}[[:space:]]*$/, "", line)
+				gsub(/[[:space:]]+$/, "", line)
+				print indent "transfer {"
+				print indent "\tto " line
+				print indent "}"
+			} else {
+				print
+			}
+		}
+	' "$corefile" >"$tmp"
+	cat "$tmp" >"$corefile"
+	rm -f "$tmp"
+	chown "$USER_NAME:$USER_NAME" "$corefile"
+	chmod 640 "$corefile"
+	printf 'rewrote one-line transfer blocks in %s (} was parsed as an AXFR address)\n' "$corefile"
+}
+
 write_corefile() {
 	corefile="${CONF_DIR}/Corefile"
 	if [ -f "$corefile" ]; then
 		printf 'keep existing %s\n' "$corefile"
+		fix_oneline_transfer
 		return
 	fi
 	if want_unbound; then
@@ -260,13 +300,13 @@ $(lan_view)
 	admin
 	forward . 127.0.0.1:${UNBOUND_PORT}
 	cache
-	transfer { to 127.0.0.1 }
+$(transfer_block "	")
 }
 . {
 	errors
 	log
 	admin
-	transfer { to 127.0.0.1 }
+$(transfer_block "	")
 }
 EOF
 	else
@@ -285,7 +325,7 @@ https://.:8080 {
 	errors
 	log
 	admin
-	transfer { to 127.0.0.1 }
+$(transfer_block "	")
 }
 EOF
 	fi
@@ -298,6 +338,7 @@ service_layout_ok() {
 	if [ "$OS" = alpine ]; then
 		[ -f /etc/init.d/coredns ] || return 1
 		grep -q 'supervisor=supervise-daemon' /etc/init.d/coredns || return 1
+		grep -q 'supervise_daemon_args' /etc/init.d/coredns || return 1
 		grep -Fq "${LIB_DIR}/coredns" /etc/init.d/coredns
 		return
 	fi
@@ -314,9 +355,16 @@ stop_service() {
 	fi
 }
 
+ensure_logs() {
+	touch /var/log/coredns.log /var/log/coredns.err
+	chown "$USER_NAME:$USER_NAME" /var/log/coredns.log /var/log/coredns.err
+	chmod 640 /var/log/coredns.log /var/log/coredns.err
+}
+
 write_openrc() {
+	ensure_logs
 	initd=/etc/init.d/coredns
-	if [ -f "$initd" ] && grep -q 'supervisor=supervise-daemon' "$initd" && grep -Fq "${LIB_DIR}/coredns" "$initd"; then
+	if [ -f "$initd" ] && grep -q 'supervisor=supervise-daemon' "$initd" && grep -Fq "${LIB_DIR}/coredns" "$initd" && grep -q 'supervise_daemon_args' "$initd"; then
 		printf 'keep existing %s\n' "$initd"
 	else
 		if [ -f "$initd" ]; then
@@ -334,8 +382,16 @@ command_args="-conf ${CONF_DIR}/Corefile"
 command_user="${USER_NAME}:${USER_NAME}"
 directory="${LIB_DIR}"
 pidfile="/run/coredns.pid"
+output_log="/var/log/coredns.log"
+error_log="/var/log/coredns.err"
 capabilities="^cap_net_bind_service"
 respawn_delay=2
+# supervise-daemon sanitizes the environment; conf.d values must be passed with --env.
+supervise_daemon_args=""
+[ -n "\${COREDNS_ADMIN_BOOTSTRAP_PASSWORD:-}" ] && supervise_daemon_args="\${supervise_daemon_args} --env COREDNS_ADMIN_BOOTSTRAP_PASSWORD=\${COREDNS_ADMIN_BOOTSTRAP_PASSWORD}"
+[ -n "\${COREDNS_OIDC_CLIENT_SECRET:-}" ] && supervise_daemon_args="\${supervise_daemon_args} --env COREDNS_OIDC_CLIENT_SECRET=\${COREDNS_OIDC_CLIENT_SECRET}"
+[ -n "\${GITHUB_TOKEN:-}" ] && supervise_daemon_args="\${supervise_daemon_args} --env GITHUB_TOKEN=\${GITHUB_TOKEN}"
+[ -n "\${COREDNS_UPDATE_REPO:-}" ] && supervise_daemon_args="\${supervise_daemon_args} --env COREDNS_UPDATE_REPO=\${COREDNS_UPDATE_REPO}"
 
 depend() {
 	need net
@@ -343,13 +399,22 @@ depend() {
 	after unbound
 	provide dns
 }
+
+start_pre() {
+	if [ ! -f ${LIB_DIR}/admin.sqlite ] && [ -z "\${COREDNS_ADMIN_BOOTSTRAP_PASSWORD:-}" ]; then
+		eerror "empty sqlite needs COREDNS_ADMIN_BOOTSTRAP_PASSWORD in /etc/conf.d/coredns"
+		return 1
+	fi
+}
 EOF
 		chmod 755 "$initd"
 	fi
 	confd=/etc/conf.d/coredns
 	if [ ! -f "$confd" ]; then
 		cat >"$confd" <<'EOF'
-# OpenRC sources this file but does not export it. Prefix every secret with export.
+# Sourced by OpenRC. supervise-daemon does not inherit these unless the
+# init script passes --env (install.sh does). Still export so a manual
+# `su coredns` run works.
 # export COREDNS_ADMIN_BOOTSTRAP_PASSWORD=''
 # export COREDNS_OIDC_CLIENT_SECRET=''
 EOF
@@ -447,12 +512,88 @@ restart_or_start() {
 			rc-service unbound restart || rc-service unbound start
 		fi
 		rc-service coredns restart || rc-service coredns start
-		return
+	else
+		if want_unbound; then
+			systemctl restart unbound.service || systemctl start unbound.service
+		fi
+		systemctl restart coredns.service || systemctl start coredns.service
 	fi
-	if want_unbound; then
-		systemctl restart unbound.service || systemctl start unbound.service
+	verify_running
+}
+
+# supervise-daemon returns before the child has proven it can stay up.
+# BusyBox pgrep -x matches the full path (/var/lib/coredns/coredns), so it
+# never sees a process named "coredns". pidof and the health URL do.
+verify_running() {
+	i=0
+	while [ "$i" -lt 8 ]; do
+		if curl -fsS -m 2 http://127.0.0.1:8080/api/v1/health >/dev/null 2>&1; then
+			return 0
+		fi
+		i=$((i + 1))
+		sleep 1
+	done
+	if pidof coredns >/dev/null 2>&1; then
+		return 0
 	fi
-	systemctl restart coredns.service || systemctl start coredns.service
+	printf 'CoreDNS did not stay running.\n' >&2
+	if [ -s /var/log/coredns.err ]; then
+		printf '--- /var/log/coredns.err ---\n' >&2
+		tail -n 40 /var/log/coredns.err >&2
+	fi
+	if [ -s /var/log/coredns.log ]; then
+		printf '--- /var/log/coredns.log ---\n' >&2
+		tail -n 40 /var/log/coredns.log >&2
+	fi
+	die "check ${CONF_DIR}/Corefile and $(secret_hint); then rc-service coredns start / systemctl start coredns"
+}
+
+rand_password() {
+	dd if=/dev/urandom bs=32 count=1 2>/dev/null | tr -dc 'A-Za-z0-9' | cut -c1-24
+}
+
+# Empty sqlite refuses to start without this. OpenRC only passes exported conf.d vars.
+ensure_bootstrap_password() {
+	if [ -f "${LIB_DIR}/admin.sqlite" ]; then
+		return 0
+	fi
+	pw="${COREDNS_ADMIN_BOOTSTRAP_PASSWORD:-}"
+	if [ "$OS" = alpine ]; then
+		envf=/etc/conf.d/coredns
+		if [ -z "$pw" ] && [ -f "$envf" ]; then
+			pw=$(sed -n "s/^export COREDNS_ADMIN_BOOTSTRAP_PASSWORD=//p" "$envf" | tail -n 1)
+			pw=$(printf '%s' "$pw" | sed "s/^['\"]//; s/['\"]$//")
+		fi
+		if [ -z "$pw" ]; then
+			pw=$(rand_password)
+			[ -n "$pw" ] || die "could not generate COREDNS_ADMIN_BOOTSTRAP_PASSWORD"
+			GENERATED_BOOTSTRAP=1
+		fi
+		touch "$envf"
+		if ! grep -q '^export COREDNS_ADMIN_BOOTSTRAP_PASSWORD=' "$envf"; then
+			printf "export COREDNS_ADMIN_BOOTSTRAP_PASSWORD='%s'\n" "$pw" >>"$envf"
+			chown "$USER_NAME:$USER_NAME" "$envf"
+			chmod 640 "$envf"
+		fi
+	else
+		envf=/etc/default/coredns
+		if [ -z "$pw" ] && [ -f "$envf" ]; then
+			pw=$(sed -n "s/^COREDNS_ADMIN_BOOTSTRAP_PASSWORD=//p" "$envf" | tail -n 1)
+			pw=$(printf '%s' "$pw" | sed "s/^['\"]//; s/['\"]$//")
+		fi
+		if [ -z "$pw" ]; then
+			pw=$(rand_password)
+			[ -n "$pw" ] || die "could not generate COREDNS_ADMIN_BOOTSTRAP_PASSWORD"
+			GENERATED_BOOTSTRAP=1
+		fi
+		touch "$envf"
+		if ! grep -q '^COREDNS_ADMIN_BOOTSTRAP_PASSWORD=' "$envf"; then
+			printf 'COREDNS_ADMIN_BOOTSTRAP_PASSWORD=%s\n' "$pw" >>"$envf"
+			chown "$USER_NAME:$USER_NAME" "$envf"
+			chmod 640 "$envf"
+		fi
+	fi
+	BOOTSTRAP_PW=$pw
 }
 
 secret_hint() {
@@ -496,11 +637,16 @@ if [ -n "$WAS_RUNNING" ] && ! service_layout_ok; then
 fi
 write_service
 install_binary
+ensure_bootstrap_password
 enable_service
 restart_or_start
 printf 'binary %s at %s/coredns (symlink %s/bin/coredns)\n' "$VERSION" "$LIB_DIR" "$PREFIX"
 printf 'Corefile: %s/Corefile\n' "$CONF_DIR"
-printf 'Admin UI: http://<host>:8080  user admin. Bootstrap password: %s\n' "$(secret_hint)"
+if [ -n "${GENERATED_BOOTSTRAP:-}" ] && [ -n "${BOOTSTRAP_PW:-}" ]; then
+	printf 'Admin UI: http://<host>:8080  user admin  password %s (saved in %s)\n' "$BOOTSTRAP_PW" "$(secret_hint)"
+else
+	printf 'Admin UI: http://<host>:8080  user admin. Bootstrap password: %s\n' "$(secret_hint)"
+fi
 printf 'Settings → Backup and Settings → Update work against this layout.\n'
 printf 'AXFR is localhost-only until you add secondary IPs in the UI.\n'
 if want_unbound; then

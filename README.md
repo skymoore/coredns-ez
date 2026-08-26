@@ -31,7 +31,7 @@ Pin a version and start now:
 curl -fsSL https://raw.githubusercontent.com/skymoore/coredns-ez/main/scripts/install.sh | sudo START=1 VERSION=v1.14.7 sh
 ```
 
-Detects Alpine vs Debian/Ubuntu. Recursion (Unbound :5353, private clients only) is on for Alpine and off for Debian/Ubuntu unless `UNBOUND=1`. UI: `http://<host>:8080` user `admin`. Set `COREDNS_ADMIN_BOOTSTRAP_PASSWORD` in `/etc/conf.d/coredns` (Alpine, with `export`) or `/etc/default/coredns` (systemd) before the first start.
+Detects Alpine vs Debian/Ubuntu. Recursion (Unbound :5353, private clients only) is on for Alpine and off for Debian/Ubuntu unless `UNBOUND=1`. UI: `http://<host>:8080` user `admin`. First start generates `COREDNS_ADMIN_BOOTSTRAP_PASSWORD` if unset (Alpine: `export` in `/etc/conf.d/coredns`; systemd: `/etc/default/coredns`).
 
 Re-run the same command to **update**: replaces `/var/lib/coredns/coredns`, restores `cap_net_bind_service`, and restarts CoreDNS if it is already running. Corefile and unbound.conf stay put. The OpenRC/systemd unit is refreshed if it still points at `/usr/local/bin` so Settings → Backup and Settings → Update can run as the `coredns` user.
 
