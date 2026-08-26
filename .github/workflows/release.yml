@@ -1,0 +1,314 @@
+# Build CoreDNS with the default plugin set plus this repo's plugins, and
+# publish GitHub release archives on the same platforms as
+# https://github.com/coredns/coredns/releases
+#
+# Platforms (from coredns Makefile.release), each compiled in a matrix job:
+#   darwin/amd64, darwin/arm64, windows/amd64 (tgz + zip),
+#   linux/amd64, linux/arm, linux/arm64, linux/mips64le, linux/ppc64le,
+#   linux/s390x, linux/mips, linux/riscv64, linux/loong64
+#
+# Triggers:
+#   - workflow_dispatch: seed or rebuild a CoreDNS version (empty = latest)
+#   - schedule: pick up a new upstream CoreDNS release when one is published
+#
+# This workflow does not run integration tests.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      coredns_version:
+        description: "CoreDNS version tag (e.g. v1.14.7). Leave empty for the latest upstream release."
+        required: false
+        default: ""
+        type: string
+      force:
+        description: "Rebuild and overwrite an existing GitHub release for this version"
+        required: false
+        default: false
+        type: boolean
+  schedule:
+    # Poll upstream; skipped when this repo already has that tag.
+    - cron: "17 */6 * * *"
+
+concurrency:
+  group: release-binaries
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    outputs:
+      skip: ${{ steps.info.outputs.skip }}
+      tag: ${{ steps.info.outputs.tag }}
+      version: ${{ steps.info.outputs.version }}
+      gitcommit: ${{ steps.src.outputs.gitcommit }}
+      coredns_commit: ${{ steps.src.outputs.coredns_commit }}
+      plugins_commit: ${{ steps.src.outputs.plugins_commit }}
+      go_version: ${{ steps.src.outputs.go_version }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GOPROXY: https://proxy.golang.org,direct
+    steps:
+      - name: Check out plugins
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Resolve CoreDNS version
+        id: info
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.coredns_version }}
+          FORCE: ${{ github.event.inputs.force || 'false' }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          raw="${INPUT_VERSION:-}"
+          raw="${raw#"${raw%%[![:space:]]*}"}"
+          raw="${raw%"${raw##*[![:space:]]}"}"
+          if [[ -z "$raw" || "$raw" == "latest" ]]; then
+            TAG="$(gh api repos/coredns/coredns/releases/latest --jq .tag_name)"
+          else
+            TAG="$raw"
+          fi
+          if [[ "$TAG" != v* ]]; then
+            TAG="v${TAG}"
+          fi
+          if [[ ! "$TAG" =~ ^v[0-9]+(\.[0-9]+)*([.-].*)?$ ]]; then
+            echo "refusing CoreDNS tag that is not a version: ${TAG}" >&2
+            exit 1
+          fi
+          if ! git ls-remote --exit-code --tags https://github.com/coredns/coredns.git "refs/tags/${TAG}" >/dev/null; then
+            echo "CoreDNS has no tag ${TAG}" >&2
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          exists=false
+          if gh release view "$TAG" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            exists=true
+          fi
+          if [[ "$exists" == true && "$FORCE" != "true" ]]; then
+            if [[ "$EVENT_NAME" == "schedule" ]]; then
+              echo "Already released ${TAG}; nothing to do."
+              echo "skip=true" >>"$GITHUB_OUTPUT"
+              echo "tag=${TAG}" >>"$GITHUB_OUTPUT"
+              echo "version=${VERSION}" >>"$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "${TAG} is already released. Re-run with force=true to overwrite." >&2
+            exit 1
+          fi
+          if [[ "$exists" == true && "$FORCE" == "true" ]]; then
+            echo "Deleting existing ${TAG} for a forced rebuild"
+            gh release delete "$TAG" --repo "${GITHUB_REPOSITORY}" --yes --cleanup-tag
+          fi
+          echo "skip=false" >>"$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >>"$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >>"$GITHUB_OUTPUT"
+          echo "Building CoreDNS ${TAG}"
+
+      - name: Prepare CoreDNS source
+        if: steps.info.outputs.skip != 'true'
+        id: src
+        run: |
+          set -euo pipefail
+          chmod +x .github/scripts/build-release.sh
+          .github/scripts/build-release.sh prepare \
+            --tag "${{ steps.info.outputs.tag }}" \
+            --plugins-dir "${GITHUB_WORKSPACE}" \
+            --out-dir "${RUNNER_TEMP}/release-src"
+          if [[ "${{ steps.info.outputs.version }}" != "$(grep CoreVersion "${RUNNER_TEMP}/release-src/coredns/coremain/version.go" | awk '{ print $3 }' | tr -d '"')" ]]; then
+            echo "coremain/version.go does not match resolved ${{ steps.info.outputs.version }}" >&2
+            exit 1
+          fi
+
+      - name: Upload source tree
+        if: steps.info.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-src
+          path: ${{ runner.temp }}/release-src
+          if-no-files-found: error
+          retention-days: 1
+          include-hidden-files: true
+
+  build:
+    name: ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: prepare
+    if: needs.prepare.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm
+          - goos: linux
+            goarch: arm64
+          - goos: linux
+            goarch: mips64le
+          - goos: linux
+            goarch: ppc64le
+          - goos: linux
+            goarch: s390x
+          - goos: linux
+            goarch: mips
+          - goos: linux
+            goarch: riscv64
+          - goos: linux
+            goarch: loong64
+    env:
+      GOPROXY: https://proxy.golang.org,direct
+    steps:
+      - name: Check out plugins
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download source tree
+        uses: actions/download-artifact@v4
+        with:
+          name: release-src
+          path: src
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: src/coredns/go-version
+          cache-dependency-path: src/coredns/go.sum
+
+      - name: Install zip
+        if: matrix.goos == 'windows'
+        run: sudo apt-get update && sudo apt-get install -y zip
+
+      - name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+        run: |
+          set -euo pipefail
+          chmod +x .github/scripts/build-release.sh
+          mkdir -p dist
+          .github/scripts/build-release.sh package \
+            --src-dir src \
+            --goos "${{ matrix.goos }}" \
+            --goarch "${{ matrix.goarch }}" \
+            --version "${{ needs.prepare.outputs.version }}" \
+            --gitcommit "${{ needs.prepare.outputs.gitcommit }}" \
+            --out-dir dist
+
+      - name: Upload ${{ matrix.goos }}/${{ matrix.goarch }} archives
+        uses: actions/upload-artifact@v4
+        with:
+          name: coredns-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish
+    needs: [prepare, build]
+    if: needs.prepare.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Download archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: coredns-*
+          merge-multiple: true
+          path: release
+
+      - name: Verify platform matrix
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          expected=(
+            "coredns_${VERSION}_darwin_amd64.tgz"
+            "coredns_${VERSION}_darwin_arm64.tgz"
+            "coredns_${VERSION}_windows_amd64.tgz"
+            "coredns_${VERSION}_windows_amd64.zip"
+            "coredns_${VERSION}_linux_amd64.tgz"
+            "coredns_${VERSION}_linux_arm.tgz"
+            "coredns_${VERSION}_linux_arm64.tgz"
+            "coredns_${VERSION}_linux_mips64le.tgz"
+            "coredns_${VERSION}_linux_ppc64le.tgz"
+            "coredns_${VERSION}_linux_s390x.tgz"
+            "coredns_${VERSION}_linux_mips.tgz"
+            "coredns_${VERSION}_linux_riscv64.tgz"
+            "coredns_${VERSION}_linux_loong64.tgz"
+          )
+          missing=0
+          for asset in "${expected[@]}"; do
+            if [[ ! -f "release/${asset}" || ! -f "release/${asset}.sha256" ]]; then
+              echo "missing ${asset} or its .sha256" >&2
+              missing=1
+            fi
+          done
+          ls -la release
+          sha256sum release/*.tgz release/*.zip
+          if [[ "$missing" -ne 0 ]]; then
+            exit 1
+          fi
+
+      - name: Write release notes
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          GITCOMMIT: ${{ needs.prepare.outputs.gitcommit }}
+          COREDNS_COMMIT: ${{ needs.prepare.outputs.coredns_commit }}
+          PLUGINS_COMMIT: ${{ needs.prepare.outputs.plugins_commit }}
+          GO_VERSION: ${{ needs.prepare.outputs.go_version }}
+          PLUGINS_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          cat >release.md <<EOF
+          CoreDNS **${TAG}** rebuilt with every default plugin plus the plugins in this repository:
+
+          - \`dns-update-persistent\`
+          - \`ixfr\`
+          - \`secondary-persistent\`
+
+          - Upstream: https://github.com/coredns/coredns/releases/tag/${TAG}
+          - CoreDNS commit: \`${COREDNS_COMMIT}\`
+          - Plugins commit: \`${PLUGINS_COMMIT}\` (\`${PLUGINS_SHA}\`)
+          - Go: \`${GO_VERSION}\`
+          - \`GitCommit\`: \`${GITCOMMIT}\`
+
+          Archives use the same names and platform matrix as [coredns/coredns](https://github.com/coredns/coredns/releases):
+
+          - darwin/amd64, darwin/arm64
+          - windows/amd64 (\`.tgz\` and \`.zip\`)
+          - linux/amd64, linux/arm, linux/arm64, linux/mips, linux/mips64le, linux/ppc64le, linux/s390x, linux/riscv64, linux/loong64
+          EOF
+
+      - name: Publish release
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          body_path: release.md
+          name: ${{ needs.prepare.outputs.tag }}
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          draft: false
+          fail_on_unmatched_files: true
+          files: |
+            release/*.tgz
+            release/*.tgz.sha256
+            release/*.zip
+            release/*.zip.sha256
