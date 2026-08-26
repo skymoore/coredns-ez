@@ -20,8 +20,12 @@ const openAPIJSON = `{
       "delete": {"summary": "Delete records"}
     },
     "/api/v1/cluster": {"get": {"summary": "Cluster roster (primary and secondaries)"}},
+    "/api/v1/cluster/join-tokens": {"post": {"summary": "Mint a one-time join key (primary)"}},
+    "/api/v1/cluster/connect": {"post": {"summary": "Join this secondary to a primary"}},
     "/api/v1/cluster/join": {"post": {"summary": "Join a secondary to this primary"}},
     "/api/v1/cluster/snapshot": {"get": {"summary": "Auth replica snapshot"}},
+    "/api/v1/tsig-keys": {"get": {"summary": "List TSIG keys"}, "post": {"summary": "Create a TSIG key"}},
+    "/api/v1/tsig-keys/{id}": {"delete": {"summary": "Delete a TSIG key"}},
     "/api/v1/metrics": {"get": {"summary": "Curated in-process Prometheus snapshot"}},
     "/api/v1/audit": {"get": {"summary": "Recent audit rows"}}
   }

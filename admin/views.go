@@ -194,6 +194,7 @@ func (a *Admin) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) 
 }
 
 func (a *Admin) serveWithNext(ctx context.Context, w dns.ResponseWriter, r *dns.Msg, next plugin.Handler) (int, error) {
+	a.tsig.Install(ctx)
 	state := request.Request{W: w, Req: r}
 	name := state.Name()
 	ip := net.ParseIP(state.IP())

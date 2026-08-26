@@ -66,6 +66,7 @@ type Admin struct {
 
 	httpClient *http.Client
 	stop       chan struct{}
+	tsig       *tsigHub
 }
 
 func (a *Admin) Name() string { return pluginName }

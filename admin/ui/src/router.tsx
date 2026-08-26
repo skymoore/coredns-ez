@@ -18,6 +18,7 @@ import { ZoneDetailPage } from "./routes/zone-detail";
 import { ClusterPage } from "./routes/cluster";
 import { UsersPage } from "./routes/users";
 import { TokensPage } from "./routes/tokens";
+import { TsigPage } from "./routes/tsig";
 import { SettingsPage } from "./routes/settings";
 import { AclsPage } from "./routes/acls";
 import { hasRole } from "./lib/roles";
@@ -125,6 +126,13 @@ const tokensRoute = createRoute({
   component: TokensPage,
 });
 
+const tsigRoute = createRoute({
+  getParentRoute: () => authRoute,
+  path: "/tsig",
+  beforeLoad: requireNeed("operator"),
+  component: TsigPage,
+});
+
 const aclsRoute = createRoute({
   getParentRoute: () => authRoute,
   path: "/acls",
@@ -150,6 +158,7 @@ const routeTree = rootRoute.addChildren([
     clusterRoute,
     usersRoute,
     tokensRoute,
+    tsigRoute,
     aclsRoute,
     settingsRoute,
   ]),

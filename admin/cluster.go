@@ -52,10 +52,13 @@ func (a *Admin) handleCreateJoinToken(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	adv, _ := a.db.Meta(store.MetaAdvertise)
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"id":         jt.ID,
-		"token":      plain,
-		"expires_at": jt.ExpiresAt,
+		"id":            jt.ID,
+		"token":         plain,
+		"expires_at":    jt.ExpiresAt,
+		"primary_url":   requestBaseURL(r),
+		"advertise_dns": adv,
 	})
 }
 
@@ -250,6 +253,7 @@ func (a *Admin) applySnapshot(snap store.Snapshot) error {
 			log.Warningf("sync zone %s: %v", z.Origin, err)
 		}
 	}
+	a.publishTSIG()
 	syncCount.WithLabelValues("ok").Inc()
 	a.refreshZoneMetrics()
 	return nil

@@ -51,6 +51,7 @@ type Snapshot struct {
 	Zones      []ZoneRow   `json:"zones"`
 	Members    []Member    `json:"members"`
 	ACLs       []ACL       `json:"acls"`
+	TSIGKeys   []TSIGKey   `json:"tsig_keys,omitempty"`
 }
 
 func (s *Store) InsertJoinToken(hash string, ttl time.Duration) (JoinToken, error) {
@@ -302,7 +303,11 @@ func (s *Store) Snapshot() (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
-	snap := Snapshot{Generation: s.Generation(), Users: users, Tokens: tokens, Zones: zones, Members: members, ACLs: acls}
+	keys, err := s.ListTSIGKeys()
+	if err != nil {
+		return Snapshot{}, err
+	}
+	snap := Snapshot{Generation: s.Generation(), Users: users, Tokens: tokens, Zones: zones, Members: members, ACLs: acls, TSIGKeys: keys}
 	if oidc, err := s.GetOIDC(); err == nil {
 		snap.OIDC = &oidc
 	}
@@ -374,6 +379,9 @@ func (s *Store) ApplySnapshot(snap Snapshot) error {
 		}
 	}
 	if err := applyACLsTx(tx, snap.ACLs); err != nil {
+		return err
+	}
+	if err := applyTSIGKeysTx(tx, snap.TSIGKeys); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`INSERT INTO meta(k, v) VALUES(?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v`, MetaGeneration, snap.Generation); err != nil {

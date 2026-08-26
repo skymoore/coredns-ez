@@ -35,6 +35,7 @@ func testAdmin(t *testing.T) *Admin {
 		primaries: map[string]*dnsupdatepersist.UpdatePersist{},
 		views:     map[string]map[string]*dnsupdatepersist.UpdatePersist{},
 		stop:      make(chan struct{}),
+		tsig:      newTSIGHub(),
 	}
 	a.mux = a.routes()
 	t.Cleanup(func() { close(a.stop) })

@@ -17,7 +17,7 @@ CoreDNS still compiles the plugin; non-DoH paths on 443 remain 404.
 
 A process is a **primary** or a **secondary**. The Corefile starts *admin*; zones
 are created through the API and stored as RFC 1035 master files under `data`.
-SQLite (`db`) holds users, API tokens, OIDC settings, cluster membership, and
+SQLite (`db`) holds users, API tokens, OIDC settings, TSIG keys, cluster membership, and
 the zone inventory. Record data is **not** in SQLite.
 
 Identity: local users (argon2id), bearer API tokens, and optional OIDC.
@@ -92,7 +92,7 @@ cookie `coredns_admin_session`, except:
 * `GET /api/v1/auth/oidc/callback`
 * `POST /api/v1/cluster/join` (join token)
 * `GET /api/v1/cluster/snapshot` (member secret)
-* `POST /api/v1/cluster/connect` on a secondary that has not joined yet (`url` + `token`)
+* `POST /api/v1/cluster/connect` on a secondary that has not joined yet (`url` + `token`); the Cluster UI mints the token on the primary and pastes it here
 
 Roles: `admin`, `operator`, `viewer`.
 
@@ -100,6 +100,10 @@ Authenticated JSON for the UI:
 
 * `GET /api/v1/metrics` curated in-process Prometheus snapshot
 * `GET /api/v1/audit` recent audit rows
+* `GET|POST /api/v1/tsig-keys`, `DELETE /api/v1/tsig-keys/{id}` HMAC keys for nsupdate / signed transfers
+* Cluster: on the primary, **Add a secondary** mints a one-time join key. On a new `role secondary` instance, Cluster → paste primary URL + key. Identity (users, tokens, TSIG keys, zone list) replicates; zone data is AXFRed from `advertise`.
+
+Zone transfers (AXFR/IXFR) are **not** gated by the admin login. The CoreDNS `transfer` plugin allows AXFR from every address in `transfer { to ... }`. `to *` means anyone who can reach the DNS port can copy the zone. TSIG is not required for AXFR unless the Corefile `tsig` plugin has `require AXFR`. List secondary IPs in `to` (and optionally require TSIG) before exposing the server.
 
 Build the UI with `make ui` (or `npm --prefix admin/ui ci && npm --prefix admin/ui run build`) before `go build`.
 

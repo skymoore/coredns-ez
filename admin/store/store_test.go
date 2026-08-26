@@ -69,15 +69,22 @@ func TestUsersAndSnapshot(t *testing.T) {
 	if got[0].Role != MemberPrimary || got[0].Name != "ns1" || got[1].Name != "ns2" {
 		t.Fatalf("replica roster %+v", got)
 	}
+	if _, err := s.CreateTSIGKey(TSIGKey{Name: "updater.example.com.", Algorithm: TSIGAlgSHA256, Secret: "c2VjcmV0"}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := s.InsertACL(ACL{Name: "internal", Networks: []string{"10.0.0.0/8"}}); err != nil {
 		t.Fatal(err)
 	}
 	snap2, err := s.Snapshot()
-	if err != nil || len(snap2.ACLs) != 1 {
-		t.Fatalf("acl snapshot %+v %v", snap2.ACLs, err)
+	if err != nil || len(snap2.ACLs) != 1 || len(snap2.TSIGKeys) != 1 {
+		t.Fatalf("acl/tsig snapshot acls=%+v keys=%+v %v", snap2.ACLs, snap2.TSIGKeys, err)
 	}
 	if err := s2.ApplySnapshot(snap2); err != nil {
 		t.Fatal(err)
+	}
+	keys, err := s2.ListTSIGKeys()
+	if err != nil || len(keys) != 1 || keys[0].Name != "updater.example.com." || keys[0].Secret != "c2VjcmV0" {
+		t.Fatalf("replica tsig %+v %v", keys, err)
 	}
 	acls, err := s2.ListACLs()
 	if err != nil || len(acls) != 1 || acls[0].Name != "internal" {

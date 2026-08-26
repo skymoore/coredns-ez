@@ -51,6 +51,10 @@ func (a *Admin) routes() http.Handler {
 			r.Post("/tokens", requireRole(store.RoleOperator, a.handleCreateToken))
 			r.Delete("/tokens/{id}", requireRole(store.RoleOperator, a.handleDeleteToken))
 
+			r.Get("/tsig-keys", requireRole(store.RoleOperator, a.handleListTSIGKeys))
+			r.Post("/tsig-keys", requireRole(store.RoleOperator, a.handleCreateTSIGKey))
+			r.Delete("/tsig-keys/{id}", requireRole(store.RoleOperator, a.handleDeleteTSIGKey))
+
 			r.Get("/zones", requireRole(store.RoleViewer, a.handleListZones))
 			r.Post("/zones", requireRole(store.RoleOperator, a.handleCreateZone))
 			r.Get("/zones/{origin}", requireRole(store.RoleViewer, a.handleGetZone))

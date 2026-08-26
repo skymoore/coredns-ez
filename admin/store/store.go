@@ -98,6 +98,13 @@ CREATE TABLE IF NOT EXISTS zone_views (
   persist_path TEXT NOT NULL,
   PRIMARY KEY (origin, acl)
 );
+CREATE TABLE IF NOT EXISTS tsig_keys (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  algorithm TEXT NOT NULL,
+  secret TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
 `
 
 const (

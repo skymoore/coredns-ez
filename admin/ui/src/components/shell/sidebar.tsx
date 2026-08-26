@@ -4,6 +4,7 @@ import {
   Globe,
   Graph,
   Key,
+  Keyhole,
   Gear,
   Shield,
   Users,
@@ -20,6 +21,7 @@ const items = [
   { to: "/acls", label: "ACLs", icon: Shield, need: "operator" as const },
   { to: "/users", label: "Users", icon: Users, need: "admin" as const },
   { to: "/tokens", label: "Tokens", icon: Key, need: "operator" as const },
+  { to: "/tsig", label: "TSIG keys", icon: Keyhole, need: "operator" as const },
   { to: "/settings", label: "Settings", icon: Gear, need: "viewer" as const },
 ];
 

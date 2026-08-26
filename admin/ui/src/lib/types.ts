@@ -69,6 +69,22 @@ export type Token = {
   secret?: string;
 };
 
+export type TsigKey = {
+  id: string;
+  name: string;
+  algorithm: string;
+  secret?: string;
+  created_at: number;
+};
+
+export type JoinToken = {
+  id: string;
+  token: string;
+  expires_at: number;
+  primary_url?: string;
+  advertise_dns?: string;
+};
+
 export type Member = {
   id: string;
   name: string;

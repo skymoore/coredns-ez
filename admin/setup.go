@@ -60,6 +60,7 @@ func setup(c *caddy.Controller) error {
 		if t := dnsserver.GetConfig(c).Handler("transfer"); t != nil {
 			if x, ok := t.(*transfer.Transfer); ok {
 				a.xfer = x
+				a.tsig.SetTransfer(x)
 				a.mu.Lock()
 				for _, p := range a.primaries {
 					p.SetTransfer(x)
@@ -97,6 +98,8 @@ func (c *adminChain) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.
 
 func attach(c *caddy.Controller, a *Admin) {
 	cfg := dnsserver.GetConfig(c)
+	a.tsig.MergeCorefile(cfg.TsigSecret)
+	cfg.TsigSecret = a.tsig.Snapshot()
 	if cfg.Transport == "https" || cfg.Transport == "https3" {
 		if !installHTTPHandler(cfg, a.mux) {
 			log.Warning("CoreDNS was built without HTTPHandler; the admin plugin will not be served on the DoH listener. Apply patches/coredns-http-handler.patch.")
@@ -186,7 +189,9 @@ func newAdmin(cfg coreConfig) (*Admin, error) {
 		views:      map[string]map[string]*dnsupdatepersist.UpdatePersist{},
 		httpClient: &http.Client{Timeout: 15 * time.Second},
 		stop:       make(chan struct{}),
+		tsig:       newTSIGHub(),
 	}
+	a.publishTSIG()
 
 	if cfg.OIDC != nil {
 		rt, err := newOIDC(context.Background(), *cfg.OIDC)
