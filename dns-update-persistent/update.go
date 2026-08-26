@@ -93,13 +93,18 @@ func (d *UpdatePersist) commitLocked(zone string, updates []dns.RR) int {
 		return dns.RcodeServerFailure
 	}
 
-	if d.Xfer != nil {
+	if xfer := d.Xfer; xfer != nil {
 		// Without this a secondary only sees the change at its next refresh,
 		// which for an ACME challenge with a 60s validation window is
 		// indistinguishable from the update never having happened.
-		if err := d.Xfer.Notify(zone); err != nil {
-			log.Warningf("NOTIFY for %s after UPDATE: %v", zone, err)
-		}
+		// Notify is UDP and can block for seconds if a peer does not
+		// answer; the zone is already on disk, so do not hold the
+		// UPDATE/HTTP caller on that timeout.
+		go func() {
+			if err := xfer.Notify(zone); err != nil {
+				log.Warningf("NOTIFY for %s after UPDATE: %v", zone, err)
+			}
+		}()
 	}
 
 	return dns.RcodeSuccess

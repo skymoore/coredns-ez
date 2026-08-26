@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS cluster_members (
   api_url TEXT NOT NULL,
   dns_addr TEXT NOT NULL,
   secret_hash TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'secondary',
   joined_at INTEGER NOT NULL,
   last_seen INTEGER NOT NULL
 );
@@ -82,6 +83,19 @@ CREATE TABLE IF NOT EXISTS audit (
   origin TEXT,
   detail TEXT
 );
+CREATE TABLE IF NOT EXISTS acls (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  networks TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS zone_views (
+  origin TEXT NOT NULL,
+  acl TEXT NOT NULL,
+  persist_path TEXT NOT NULL,
+  PRIMARY KEY (origin, acl)
+);
 `
 
 const (
@@ -96,7 +110,11 @@ const (
 	MetaAdvertise  = "advertise_dns"
 	MetaPrimaryURL = "primary_url"
 	MetaMemberSec  = "member_secret"
+	MetaMemberID   = "member_id"
 	MetaGeneration = "snapshot_generation"
+
+	MemberPrimary   = "primary"
+	MemberSecondary = "secondary"
 )
 
 // Store is the SQLite identity and inventory database.
@@ -126,6 +144,10 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	s := &Store{db: db}
+	if err := s.migrate(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := s.ensureMeta(); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -134,6 +156,12 @@ func Open(path string) (*Store, error) {
 }
 
 func (s *Store) Close() error { return s.db.Close() }
+
+func (s *Store) migrate() error {
+	// Existing DBs created the members table before role existed.
+	_, _ = s.db.Exec(`ALTER TABLE cluster_members ADD COLUMN role TEXT NOT NULL DEFAULT 'secondary'`)
+	return nil
+}
 
 func (s *Store) ensureMeta() error {
 	if _, err := s.Meta(MetaNodeID); err == nil {

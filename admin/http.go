@@ -58,9 +58,15 @@ func (a *Admin) routes() http.Handler {
 			r.Delete("/zones/{origin}", requireRole(store.RoleOperator, a.handleDeleteZone))
 			r.Post("/zones/{origin}/notify", requireRole(store.RoleOperator, a.handleNotifyZone))
 			r.Post("/zones/{origin}/transfer", requireRole(store.RoleOperator, a.handleTransferZone))
+			r.Get("/acls", requireRole(store.RoleViewer, a.handleListACLs))
+			r.Post("/acls", requireRole(store.RoleOperator, a.handleCreateACL))
+			r.Patch("/acls/{name}", requireRole(store.RoleOperator, a.handlePatchACL))
+			r.Delete("/acls/{name}", requireRole(store.RoleOperator, a.handleDeleteACL))
+
 			r.Get("/zones/{origin}/records", requireRole(store.RoleViewer, a.handleListRecords))
 			r.Post("/zones/{origin}/records", requireRole(store.RoleOperator, a.handleAddRecord))
 			r.Put("/zones/{origin}/records", requireRole(store.RoleOperator, a.handleReplaceRecords))
+			r.Patch("/zones/{origin}/records", requireRole(store.RoleOperator, a.handlePatchRecord))
 			r.Delete("/zones/{origin}/records", requireRole(store.RoleOperator, a.handleDeleteRecords))
 
 			r.Get("/cluster", requireRole(store.RoleAdmin, a.handleGetCluster))

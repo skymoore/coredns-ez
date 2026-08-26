@@ -65,7 +65,7 @@ run_stage() {
 	local stage="$1"
 	echo
 	echo "======== stage $stage ========"
-	"${COMPOSE[@]}" --profile test run --rm --no-deps -T tester --stage "$stage"
+	"${COMPOSE[@]}" --profile test run --rm --no-deps --build -T tester --stage "$stage"
 }
 
 cmd_test() {

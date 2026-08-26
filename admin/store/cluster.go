@@ -2,7 +2,6 @@ package store
 
 import (
 	"database/sql"
-	"strings"
 	"time"
 )
 
@@ -12,6 +11,7 @@ type Member struct {
 	APIURL     string `json:"api_url"`
 	DNSAddr    string `json:"dns_addr"`
 	SecretHash string `json:"-"`
+	Role       string `json:"role"`
 	JoinedAt   int64  `json:"joined_at"`
 	LastSeen   int64  `json:"last_seen"`
 }
@@ -47,6 +47,8 @@ type Snapshot struct {
 	Tokens     []Token     `json:"tokens"`
 	OIDC       *OIDCConfig `json:"oidc,omitempty"`
 	Zones      []ZoneRow   `json:"zones"`
+	Members    []Member    `json:"members"`
+	ACLs       []ACL       `json:"acls"`
 }
 
 func (s *Store) InsertJoinToken(hash string, ttl time.Duration) (JoinToken, error) {
@@ -85,48 +87,98 @@ func (s *Store) ConsumeJoinToken(hash string) (JoinToken, error) {
 	return jt, nil
 }
 
-func (s *Store) InsertMember(m Member) error {
+func (s *Store) InsertMember(m Member) (Member, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if m.ID == "" {
 		id, err := newID()
 		if err != nil {
-			return err
+			return Member{}, err
 		}
 		m.ID = id
+	}
+	if m.Role == "" {
+		m.Role = MemberSecondary
 	}
 	now := nowUnix()
 	if m.JoinedAt == 0 {
 		m.JoinedAt = now
 	}
 	m.LastSeen = now
-	_, err := s.db.Exec(`INSERT INTO cluster_members(id, name, api_url, dns_addr, secret_hash, joined_at, last_seen) VALUES(?,?,?,?,?,?,?)`,
-		m.ID, m.Name, m.APIURL, m.DNSAddr, m.SecretHash, m.JoinedAt, m.LastSeen)
-	return err
+	_, err := s.db.Exec(`INSERT INTO cluster_members(id, name, api_url, dns_addr, secret_hash, role, joined_at, last_seen) VALUES(?,?,?,?,?,?,?,?)`,
+		m.ID, m.Name, m.APIURL, m.DNSAddr, m.SecretHash, m.Role, m.JoinedAt, m.LastSeen)
+	return m, err
+}
+
+func scanMember(scanner interface{ Scan(dest ...any) error }) (Member, error) {
+	var m Member
+	err := scanner.Scan(&m.ID, &m.Name, &m.APIURL, &m.DNSAddr, &m.SecretHash, &m.Role, &m.JoinedAt, &m.LastSeen)
+	if err == nil && m.Role == "" {
+		m.Role = MemberSecondary
+	}
+	return m, err
+}
+
+func (s *Store) GetMember(id string) (Member, error) {
+	return scanMember(s.db.QueryRow(`SELECT id, name, api_url, dns_addr, secret_hash, role, joined_at, last_seen FROM cluster_members WHERE id = ?`, id))
 }
 
 func (s *Store) ListMembers() ([]Member, error) {
-	rows, err := s.db.Query(`SELECT id, name, api_url, dns_addr, secret_hash, joined_at, last_seen FROM cluster_members ORDER BY joined_at`)
+	rows, err := s.db.Query(`SELECT id, name, api_url, dns_addr, secret_hash, role, joined_at, last_seen FROM cluster_members ORDER BY CASE role WHEN 'primary' THEN 0 ELSE 1 END, joined_at`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var out []Member
 	for rows.Next() {
-		var m Member
-		if err := rows.Scan(&m.ID, &m.Name, &m.APIURL, &m.DNSAddr, &m.SecretHash, &m.JoinedAt, &m.LastSeen); err != nil {
+		m, err := scanMember(rows)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, m)
+	}
+	if out == nil {
+		out = []Member{}
 	}
 	return out, rows.Err()
 }
 
 func (s *Store) GetMemberBySecretHash(hash string) (Member, error) {
-	var m Member
-	err := s.db.QueryRow(`SELECT id, name, api_url, dns_addr, secret_hash, joined_at, last_seen FROM cluster_members WHERE secret_hash = ?`, hash).
-		Scan(&m.ID, &m.Name, &m.APIURL, &m.DNSAddr, &m.SecretHash, &m.JoinedAt, &m.LastSeen)
-	return m, err
+	return scanMember(s.db.QueryRow(`SELECT id, name, api_url, dns_addr, secret_hash, role, joined_at, last_seen FROM cluster_members WHERE secret_hash = ?`, hash))
+}
+
+// UpsertRosterMember inserts or updates public roster fields. Secret hashes
+// are left untouched. changed is true when a replica should pull a new snapshot.
+func (s *Store) UpsertRosterMember(m Member) (changed bool, err error) {
+	existing, err := s.GetMember(m.ID)
+	if err != nil {
+		if err != sql.ErrNoRows {
+			return false, err
+		}
+		_, err = s.InsertMember(m)
+		return err == nil, err
+	}
+	if m.APIURL == "" {
+		m.APIURL = existing.APIURL
+	}
+	if m.DNSAddr == "" {
+		m.DNSAddr = existing.DNSAddr
+	}
+	if m.Name == "" {
+		m.Name = existing.Name
+	}
+	if m.Role == "" {
+		m.Role = existing.Role
+	}
+	same := existing.Name == m.Name && existing.APIURL == m.APIURL && existing.DNSAddr == m.DNSAddr && existing.Role == m.Role
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err = s.db.Exec(`UPDATE cluster_members SET name=?, api_url=?, dns_addr=?, role=?, last_seen=? WHERE id=?`,
+		m.Name, m.APIURL, m.DNSAddr, m.Role, nowUnix(), m.ID)
+	if err != nil {
+		return false, err
+	}
+	return !same, nil
 }
 
 func (s *Store) TouchMember(id string) error {
@@ -240,7 +292,15 @@ func (s *Store) Snapshot() (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
-	snap := Snapshot{Generation: s.Generation(), Users: users, Tokens: tokens, Zones: zones}
+	members, err := s.ListMembers()
+	if err != nil {
+		return Snapshot{}, err
+	}
+	acls, err := s.ListACLs()
+	if err != nil {
+		return Snapshot{}, err
+	}
+	snap := Snapshot{Generation: s.Generation(), Users: users, Tokens: tokens, Zones: zones, Members: members, ACLs: acls}
 	if oidc, err := s.GetOIDC(); err == nil {
 		snap.OIDC = &oidc
 	}
@@ -293,31 +353,29 @@ func (s *Store) ApplySnapshot(snap Snapshot) error {
 			return err
 		}
 	}
+	if snap.Members != nil {
+		if _, err := tx.Exec(`DELETE FROM cluster_members`); err != nil {
+			return err
+		}
+		for _, m := range snap.Members {
+			role := m.Role
+			if role == "" {
+				role = MemberSecondary
+			}
+			if m.JoinedAt == 0 {
+				m.JoinedAt = nowUnix()
+			}
+			if _, err := tx.Exec(`INSERT INTO cluster_members(id, name, api_url, dns_addr, secret_hash, role, joined_at, last_seen) VALUES(?,?,?,?,?,?,?,?)`,
+				m.ID, m.Name, m.APIURL, m.DNSAddr, m.SecretHash, role, m.JoinedAt, m.LastSeen); err != nil {
+				return err
+			}
+		}
+	}
+	if err := applyACLsTx(tx, snap.ACLs); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(`INSERT INTO meta(k, v) VALUES(?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v`, MetaGeneration, snap.Generation); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
-
-func (s *Store) Audit(actor, action, origin, detail string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	_, _ = s.db.Exec(`INSERT INTO audit(at, actor, action, origin, detail) VALUES(?,?,?,?,?)`, nowUnix(), actor, action, origin, detail)
-}
-
-func SplitCSV(s string) []string {
-	if s == "" {
-		return nil
-	}
-	parts := strings.Split(s, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
-func JoinCSV(v []string) string { return strings.Join(v, ",") }

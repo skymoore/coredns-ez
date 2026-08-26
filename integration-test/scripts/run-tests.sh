@@ -487,6 +487,16 @@ stage_admin() {
 		return
 	fi
 
+	resp=$(curl -sS -w '\n%{http_code}' "$API_PRIMARY/api/v1/cluster" \
+		-H "Authorization: Bearer $token")
+	code=$(api_code "$resp")
+	body=$(api_body "$resp")
+	if [[ "$code" == "200" ]] && printf '%s' "$body" | grep -q '"role":"primary"' && printf '%s' "$body" | grep -q '"role":"secondary"'; then
+		pass "GET primary /api/v1/cluster lists primary and secondary"
+	else
+		fail "GET primary /api/v1/cluster lists primary and secondary" "code=$code body=$body"
+	fi
+
 	local stoken
 	stoken=$(api_login "$API_SECONDARY" || true)
 	if [[ -n "$stoken" && "$stoken" != "null" ]]; then
@@ -494,6 +504,16 @@ stage_admin() {
 	else
 		fail "login on secondary with primary credentials"
 		return
+	fi
+
+	resp=$(curl -sS -w '\n%{http_code}' "$API_SECONDARY/api/v1/cluster" \
+		-H "Authorization: Bearer $stoken")
+	code=$(api_code "$resp")
+	body=$(api_body "$resp")
+	if [[ "$code" == "200" ]] && printf '%s' "$body" | grep -q '"role":"primary"' && printf '%s' "$body" | grep -q '"role":"secondary"'; then
+		pass "GET secondary /api/v1/cluster lists primary and secondary"
+	else
+		fail "GET secondary /api/v1/cluster lists primary and secondary" "code=$code body=$body"
 	fi
 
 	resp=$(curl -sS -w '\n%{http_code}' "$API_SECONDARY/api/v1/zones" \
@@ -511,6 +531,79 @@ stage_admin() {
 	else
 		fail "secondary UDP serves API-created $API_OWNER"
 	fi
+
+	stage_split_horizon "$token"
+}
+
+stage_split_horizon_query() {
+	local tag="${1:+$1 }"
+	# Queries to 172.30.53.10 leave from 172.30.53.30 (outside 10/8).
+	# Queries to 10.53.0.10 leave from 10.53.0.30 (inside the internal ACL).
+	assert_rr "$PRIMARY" "$SPLIT_OWNER" A "$SPLIT_PUBLIC" "${tag}public client gets public split A"
+	assert_rr "$INTERNAL_DNS" "$SPLIT_OWNER" A "$SPLIT_INTERNAL" "${tag}internal client gets ACL split A"
+	assert_no_rr "$PRIMARY" "$NAS_OWNER" A "$NAS_INTERNAL" "${tag}public client does not see internal-only nas"
+	assert_rr "$INTERNAL_DNS" "$NAS_OWNER" A "$NAS_INTERNAL" "${tag}internal client gets internal-only nas"
+}
+
+stage_split_horizon() {
+	local token="$1"
+	echo "-- split-horizon ACLs via API"
+
+	resp=$(curl -sS -w '\n%{http_code}' -X POST "$API_PRIMARY/api/v1/acls" \
+		-H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+		-d '{"name":"internal","networks":["10.0.0.0/8"]}')
+	code=$(api_code "$resp")
+	if [[ "$code" == "201" || "$code" == "400" ]]; then
+		# 400 if the ACL already exists on a re-run.
+		pass "POST /api/v1/acls internal"
+	else
+		fail "POST /api/v1/acls internal" "code=$code body=$(api_body "$resp")"
+		return
+	fi
+
+	resp=$(curl -sS -w '\n%{http_code}' -X POST "$API_PRIMARY/api/v1/zones/${API_ZONE}/records" \
+		-H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+		-d "{\"name\":\"$SPLIT_OWNER\",\"type\":\"A\",\"ttl\":60,\"rdata\":\"$SPLIT_PUBLIC\"}")
+	code=$(api_code "$resp")
+	if [[ "$code" == "201" ]]; then
+		pass "POST public A $SPLIT_OWNER"
+	else
+		fail "POST public A $SPLIT_OWNER" "code=$code body=$(api_body "$resp")"
+		return
+	fi
+
+	resp=$(curl -sS -w '\n%{http_code}' -X POST "$API_PRIMARY/api/v1/zones/${API_ZONE}/records" \
+		-H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+		-d "{\"name\":\"$SPLIT_OWNER\",\"type\":\"A\",\"ttl\":60,\"rdata\":\"$SPLIT_INTERNAL\",\"acl\":\"internal\"}")
+	code=$(api_code "$resp")
+	if [[ "$code" == "201" ]]; then
+		pass "POST ACL A $SPLIT_OWNER"
+	else
+		fail "POST ACL A $SPLIT_OWNER" "code=$code body=$(api_body "$resp")"
+		return
+	fi
+
+	resp=$(curl -sS -w '\n%{http_code}' -X POST "$API_PRIMARY/api/v1/zones/${API_ZONE}/records" \
+		-H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+		-d "{\"name\":\"$NAS_OWNER\",\"type\":\"A\",\"ttl\":60,\"rdata\":\"$NAS_INTERNAL\",\"acl\":\"internal\"}")
+	code=$(api_code "$resp")
+	if [[ "$code" == "201" ]]; then
+		pass "POST ACL A $NAS_OWNER"
+	else
+		fail "POST ACL A $NAS_OWNER" "code=$code body=$(api_body "$resp")"
+		return
+	fi
+
+	if wait_rr "$PRIMARY" "$SPLIT_OWNER" A "$SPLIT_PUBLIC" 20; then
+		pass "primary serves public split A"
+	else
+		fail "primary serves public split A"
+	fi
+
+	assert_rr "$INTERNAL_DNS" "$SPLIT_OWNER" A "$SPLIT_INTERNAL" "internal client gets ACL split A"
+	assert_no_rr "$PRIMARY" "$NAS_OWNER" A "$NAS_INTERNAL" "public client does not get internal-only nas"
+	assert_rr "$INTERNAL_DNS" "$NAS_OWNER" A "$NAS_INTERNAL" "internal client gets internal-only nas"
+	assert_rr "$INTERNAL_DNS" "$API_OWNER" A "$API_ADDR" "internal client still sees public-only www"
 }
 
 stage_primary_restart() {
@@ -544,6 +637,7 @@ stage_primary_restart() {
 		fail "API login on primary after restart"
 	fi
 	assert_rr "$PRIMARY" "$API_OWNER" A "$API_ADDR" "primary still serves API-created A after restart"
+	stage_split_horizon_query "after restart"
 
 	if wait_rr "$SECONDARY" "persist-probe.$ZONE" TXT '"still-here"' 30; then
 		pass "secondary still serves persist-probe"

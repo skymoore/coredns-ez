@@ -14,13 +14,13 @@ import (
 	"github.com/skymoore/coredns-plugins/internal/zonereg"
 )
 
-func (a *Admin) handleGetCluster(w http.ResponseWriter, _ *http.Request) {
+func (a *Admin) handleGetCluster(w http.ResponseWriter, r *http.Request) {
 	id, _ := a.db.Meta(store.MetaClusterID)
-	members, _ := a.db.ListMembers()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id":      id,
 		"role":    a.cfg.Role,
-		"members": members,
+		"self_id": a.selfMemberID(),
+		"members": a.roster(r),
 	})
 }
 
@@ -122,11 +122,16 @@ func (a *Admin) handleClusterJoin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "secret")
 		return
 	}
-	m := store.Member{Name: body.Name, APIURL: body.APIURL, DNSAddr: body.DNSAddr, SecretHash: hash}
-	if err := a.db.InsertMember(m); err != nil {
+	if err := a.ensureSelfMember(requestBaseURL(r)); err != nil {
+		log.Warningf("cluster self member: %v", err)
+	}
+	m := store.Member{Name: body.Name, APIURL: body.APIURL, DNSAddr: body.DNSAddr, SecretHash: hash, Role: store.MemberSecondary}
+	inserted, err := a.db.InsertMember(m)
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	_, _ = a.db.BumpGeneration()
 	clusterID, _ := a.db.Meta(store.MetaClusterID)
 	if clusterID == "" {
 		clusterID, _ = randomHex(8)
@@ -145,26 +150,33 @@ func (a *Admin) handleClusterJoin(w http.ResponseWriter, r *http.Request) {
 	adv, _ := a.db.Meta(store.MetaAdvertise)
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"cluster_id":    clusterID,
+		"member_id":     inserted.ID,
 		"member_secret": plain,
 		"advertise_dns": adv,
 		"snapshot":      snap,
 	})
 }
 
-func (a *Admin) handleListMembers(w http.ResponseWriter, _ *http.Request) {
-	members, err := a.db.ListMembers()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"members": members})
+func (a *Admin) handleListMembers(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"members": a.roster(r)})
 }
 
 func (a *Admin) handleDeleteMember(w http.ResponseWriter, r *http.Request) {
-	if err := a.db.DeleteMember(chi.URLParam(r, "id")); err != nil {
+	id := chi.URLParam(r, "id")
+	m, err := a.db.GetMember(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	if memberRole(m) == store.MemberPrimary {
+		writeError(w, http.StatusConflict, "cannot remove the primary")
+		return
+	}
+	if err := a.db.DeleteMember(id); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	_, _ = a.db.BumpGeneration()
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -244,6 +256,10 @@ func (a *Admin) applySnapshot(snap store.Snapshot) error {
 }
 
 func (a *Admin) pullLoop() {
+	if err := a.pullSnapshot(); err != nil {
+		syncCount.WithLabelValues("error").Inc()
+		log.Warningf("cluster pull: %v", err)
+	}
 	t := time.NewTicker(30 * time.Second)
 	defer t.Stop()
 	for {
@@ -309,6 +325,7 @@ func (a *Admin) joinPrimary(url, token, name, dnsAddr, apiURL string) error {
 	}
 	var out struct {
 		ClusterID    string         `json:"cluster_id"`
+		MemberID     string         `json:"member_id"`
 		MemberSecret string         `json:"member_secret"`
 		AdvertiseDNS string         `json:"advertise_dns"`
 		Snapshot     store.Snapshot `json:"snapshot"`
@@ -319,6 +336,9 @@ func (a *Admin) joinPrimary(url, token, name, dnsAddr, apiURL string) error {
 	_ = a.db.SetMeta(store.MetaClusterID, out.ClusterID)
 	_ = a.db.SetMeta(store.MetaMemberSec, out.MemberSecret)
 	_ = a.db.SetMeta(store.MetaPrimaryURL, url)
+	if out.MemberID != "" {
+		_ = a.db.SetMeta(store.MetaMemberID, out.MemberID)
+	}
 	if out.AdvertiseDNS != "" {
 		_ = a.db.SetMeta(store.MetaAdvertise, out.AdvertiseDNS)
 		if a.cfg.PrimaryDNS == "" {

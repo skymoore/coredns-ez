@@ -12,7 +12,7 @@ export function StatStrip({
 }) {
   const items = [
     { label: "Zones", value: zones ? String(zones.length) : "—" },
-    { label: "Members", value: cluster ? String(cluster.members?.length ?? 0) : "—" },
+    { label: "Nodes", value: cluster ? String(cluster.members?.length ?? 0) : "—" },
     { label: "Role", value: node?.role ?? "—" },
     { label: "Generation", value: node ? formatNumber(node.generation, 0) : "—" },
   ];

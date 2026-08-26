@@ -14,6 +14,7 @@ import (
 	"github.com/coredns/coredns/plugin"
 	"github.com/coredns/coredns/plugin/pkg/parse"
 	"github.com/coredns/coredns/plugin/transfer"
+	"github.com/miekg/dns"
 	"github.com/skymoore/coredns-plugins/admin/store"
 	dnsupdatepersist "github.com/skymoore/coredns-plugins/dns-update-persistent"
 )
@@ -81,6 +82,18 @@ func setup(c *caddy.Controller) error {
 	return nil
 }
 
+// adminChain keeps a per-server-block Next so the process-wide singleton can
+// sit in front of a Corefile primary (ACL overlay) without clobbering the
+// catch-all block's fallthrough.
+type adminChain struct {
+	*Admin
+	next plugin.Handler
+}
+
+func (c *adminChain) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
+	return c.Admin.serveWithNext(ctx, w, r, c.next)
+}
+
 func attach(c *caddy.Controller, a *Admin) {
 	cfg := dnsserver.GetConfig(c)
 	if cfg.Transport == "https" || cfg.Transport == "https3" {
@@ -89,16 +102,21 @@ func attach(c *caddy.Controller, a *Admin) {
 		}
 	}
 	cfg.AddPlugin(func(next plugin.Handler) plugin.Handler {
-		a.Next = next
 		a.mu.Lock()
+		a.Next = next
 		for _, p := range a.primaries {
 			p.SetNext(next)
+		}
+		for _, m := range a.views {
+			for _, p := range m {
+				p.SetNext(next)
+			}
 		}
 		if a.secondaries != nil {
 			a.secondaries.SetNext(next)
 		}
 		a.mu.Unlock()
-		return a
+		return &adminChain{Admin: a, next: next}
 	})
 }
 
@@ -155,6 +173,7 @@ func newAdmin(cfg coreConfig) (*Admin, error) {
 		cfg:        cfg,
 		db:         db,
 		primaries:  map[string]*dnsupdatepersist.UpdatePersist{},
+		views:      map[string]map[string]*dnsupdatepersist.UpdatePersist{},
 		httpClient: &http.Client{Timeout: 15 * time.Second},
 		stop:       make(chan struct{}),
 	}
@@ -176,6 +195,12 @@ func newAdmin(cfg coreConfig) (*Admin, error) {
 	}
 
 	a.mux = a.routes()
+
+	if cfg.Role == rolePrimary {
+		if err := a.ensureSelfMember(""); err != nil {
+			log.Warningf("cluster self member: %v", err)
+		}
+	}
 
 	if cfg.Role == roleSecondary {
 		cluster, _ := db.Meta(store.MetaClusterID)

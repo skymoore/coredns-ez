@@ -19,6 +19,12 @@ API_PASS="${API_PASS:-integration-test-password}"
 API_ZONE="${API_ZONE:-it-api.example.}"
 API_OWNER="${API_OWNER:-www.it-api.example.}"
 API_ADDR="${API_ADDR:-192.0.2.99}"
+INTERNAL_DNS="${INTERNAL_DNS:-10.53.0.10}"
+SPLIT_OWNER="${SPLIT_OWNER:-split.it-api.example.}"
+SPLIT_PUBLIC="${SPLIT_PUBLIC:-192.0.2.40}"
+SPLIT_INTERNAL="${SPLIT_INTERNAL:-10.8.0.40}"
+NAS_OWNER="${NAS_OWNER:-nas.it-api.example.}"
+NAS_INTERNAL="${NAS_INTERNAL:-10.8.0.9}"
 METRICS_PRIMARY="${METRICS_PRIMARY:-http://172.30.53.10:9153/metrics}"
 METRICS_SECONDARY="${METRICS_SECONDARY:-http://172.30.53.20:9153/metrics}"
 
@@ -170,6 +176,32 @@ assert_rr() {
 		return 0
 	fi
 	fail "$label" "expected '$expect', got: ${got:-<empty>}"
+	return 1
+}
+
+# Query with an explicit source address (dig -b) so split-horizon ACLs can be
+# exercised from the same tester container.
+assert_rr_from() {
+	local src="$1" at="$2" name="$3" type="$4" expect="$5" label="$6"
+	local got
+	got=$(dig "${DIG_OPTS[@]}" -b "$src" @"$at" +short "$name" "$type" || true)
+	if printf '%s\n' "$got" | grep -Fqx "$expect"; then
+		pass "$label"
+		return 0
+	fi
+	fail "$label" "src=$src expected '$expect', got: ${got:-<empty>}"
+	return 1
+}
+
+assert_no_rr_from() {
+	local src="$1" at="$2" name="$3" type="$4" expect="$5" label="$6"
+	local got
+	got=$(dig "${DIG_OPTS[@]}" -b "$src" @"$at" +short "$name" "$type" || true)
+	if ! printf '%s\n' "$got" | grep -Fqx "$expect"; then
+		pass "$label"
+		return 0
+	fi
+	fail "$label" "src=$src still has '$expect' in: $got"
 	return 1
 }
 

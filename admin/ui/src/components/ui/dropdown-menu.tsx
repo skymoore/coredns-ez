@@ -19,7 +19,7 @@ export function DropdownMenuContent({
       <Dropdown.Content
         align={align}
         className={cn(
-          "z-[30] min-w-40 rounded-md border border-border bg-popover p-1 shadow-md",
+          "z-[55] min-w-40 rounded-md border border-border bg-popover p-1 shadow-md",
           className,
         )}
       >

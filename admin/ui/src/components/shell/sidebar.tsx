@@ -5,6 +5,7 @@ import {
   Graph,
   Key,
   Gear,
+  Shield,
   Users,
 } from "@phosphor-icons/react";
 import icon from "@/assets/brand/coredns-icon.svg";
@@ -16,6 +17,7 @@ const items = [
   { to: "/", label: "Dashboard", icon: Gauge, need: "viewer" as const },
   { to: "/zones", label: "Zones", icon: Globe, need: "viewer" as const },
   { to: "/cluster", label: "Cluster", icon: Graph, need: "admin" as const },
+  { to: "/acls", label: "ACLs", icon: Shield, need: "operator" as const },
   { to: "/users", label: "Users", icon: Users, need: "admin" as const },
   { to: "/tokens", label: "Tokens", icon: Key, need: "operator" as const },
   { to: "/settings", label: "Settings", icon: Gear, need: "viewer" as const },

@@ -36,6 +36,15 @@ export type DnsRecord = {
   type: string;
   ttl: number;
   rdata: string;
+  acl?: string;
+};
+
+export type Acl = {
+  id: string;
+  name: string;
+  networks: string[];
+  position: number;
+  created_at: number;
 };
 
 export type User = {
@@ -63,13 +72,16 @@ export type Member = {
   name: string;
   api_url: string;
   dns_addr: string;
+  role: "primary" | "secondary" | string;
   joined_at: number;
   last_seen: number;
+  self?: boolean;
 };
 
 export type Cluster = {
   id: string;
   role: string;
+  self_id?: string;
   members: Member[];
 };
 

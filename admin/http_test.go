@@ -33,6 +33,7 @@ func testAdmin(t *testing.T) *Admin {
 		cfg:       coreConfig{Role: rolePrimary, Data: dir, DB: filepath.Join(dir, "api.sqlite")},
 		db:        st,
 		primaries: map[string]*dnsupdatepersist.UpdatePersist{},
+		views:     map[string]map[string]*dnsupdatepersist.UpdatePersist{},
 		stop:      make(chan struct{}),
 	}
 	a.mux = a.routes()

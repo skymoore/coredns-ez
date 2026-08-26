@@ -42,6 +42,10 @@ example.com {
 		require_opcode UPDATE
 	}
 
+	# Singleton overlay: ACL views for this Corefile primary, then Next to
+	# dns-update-persistent for the public zonefile. Admin does not own example.com.
+	admin
+
 	dns-update-persistent {
 		file /var/lib/coredns/db.example.com
 		mutable A AAAA NS CNAME MX TXT SRV NAPTR DS SSHFP TLSA CAA URI LOC HINFO RP HTTPS SVCB PTR EUI48 EUI64 CERT KX AFSDB CDS CDNSKEY OPENPGPKEY SMIMEA

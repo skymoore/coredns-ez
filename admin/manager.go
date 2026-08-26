@@ -117,6 +117,7 @@ func (a *Admin) deleteZone(origin string) error {
 		zonereg.Unregister(origin)
 		_ = os.Remove(p.Path())
 		_ = os.Remove(p.Path() + ".ixfr")
+		a.dropViews(origin)
 		_ = a.db.DeleteZone(origin)
 		_, _ = a.db.BumpGeneration()
 		go a.pushSnapshot()
@@ -172,6 +173,9 @@ func (a *Admin) loadPersistedZones() error {
 				log.Warningf("load secondary %s: %v", z.Origin, err)
 			}
 		}
+	}
+	if err := a.loadViews(); err != nil {
+		log.Warningf("load views: %v", err)
 	}
 	a.refreshZoneMetrics()
 	return nil

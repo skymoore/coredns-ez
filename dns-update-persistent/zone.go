@@ -41,6 +41,13 @@ func (d *UpdatePersist) rrsetExists(name string, rrtype uint16) bool {
 	return len(d.rrsetOf(name, rrtype)) > 0
 }
 
+// HasRRset is the locked lookup used by split-horizon overlay serving.
+func (d *UpdatePersist) HasRRset(name string, rrtype uint16) bool {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.rrsetExists(name, rrtype)
+}
+
 func (d *UpdatePersist) rrsetOf(name string, rrtype uint16) []dns.RR {
 	c := strings.ToLower(dns.CanonicalName(name))
 	var out []dns.RR

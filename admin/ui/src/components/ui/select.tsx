@@ -18,6 +18,7 @@ export function Select({
   return (
     <SelectPrimitive.Root value={value} onValueChange={onValueChange}>
       <SelectPrimitive.Trigger
+        aria-label={placeholder ?? "Type"}
         className={cn(
           "flex h-9 w-full items-center justify-between rounded-md border border-input bg-card px-3 text-sm",
           className,
@@ -27,7 +28,11 @@ export function Select({
         <CaretDown size={14} />
       </SelectPrimitive.Trigger>
       <SelectPrimitive.Portal>
-        <SelectPrimitive.Content className="z-[30] overflow-hidden rounded-md border border-border bg-popover shadow-md">
+        <SelectPrimitive.Content
+          position="popper"
+          sideOffset={4}
+          className="z-[55] max-h-[min(24rem,var(--radix-select-content-available-height))] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-md border border-border bg-popover shadow-md"
+        >
           <SelectPrimitive.Viewport className="p-1">
             {options.map((o) => (
               <SelectPrimitive.Item

@@ -42,7 +42,7 @@ Fixed rem scale, ratio ~1.2. Body 14px. Page titles 22px. Tabular nums on serial
 
 ## Z-index
 
-base 0, sticky 20, dropdown 30, overlay 40, modal 50, toast 60, tooltip 70.
+base 0, sticky 20, dropdown 30, overlay 40, modal 50, popover 55 (portaled menus over dialogs), toast 60, tooltip 70.
 
 ## Anti-references
 

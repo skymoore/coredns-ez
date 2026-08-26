@@ -19,6 +19,7 @@ import { ClusterPage } from "./routes/cluster";
 import { UsersPage } from "./routes/users";
 import { TokensPage } from "./routes/tokens";
 import { SettingsPage } from "./routes/settings";
+import { AclsPage } from "./routes/acls";
 import { hasRole } from "./lib/roles";
 import type { Actor, Role } from "./lib/types";
 
@@ -124,6 +125,13 @@ const tokensRoute = createRoute({
   component: TokensPage,
 });
 
+const aclsRoute = createRoute({
+  getParentRoute: () => authRoute,
+  path: "/acls",
+  beforeLoad: requireNeed("operator"),
+  component: AclsPage,
+});
+
 const settingsRoute = createRoute({
   getParentRoute: () => authRoute,
   path: "/settings",
@@ -142,6 +150,7 @@ const routeTree = rootRoute.addChildren([
     clusterRoute,
     usersRoute,
     tokensRoute,
+    aclsRoute,
     settingsRoute,
   ]),
 ]);

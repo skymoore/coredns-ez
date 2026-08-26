@@ -10,12 +10,16 @@ const openAPIJSON = `{
     "/api/v1/auth/login": {"post": {"summary": "Password login"}},
     "/api/v1/auth/oidc/login": {"get": {"summary": "OIDC redirect"}},
     "/api/v1/zones": {"get": {"summary": "List zones"}, "post": {"summary": "Create zone"}},
+    "/api/v1/acls": {"get": {"summary": "List ACLs"}, "post": {"summary": "Create ACL"}},
+    "/api/v1/acls/{name}": {"patch": {"summary": "Rename ACL or replace networks"}, "delete": {"summary": "Delete ACL and its view zonefiles"}},
     "/api/v1/zones/{origin}/records": {
       "get": {"summary": "List records"},
       "post": {"summary": "Add record"},
       "put": {"summary": "Replace RRset"},
+      "patch": {"summary": "Replace one record"},
       "delete": {"summary": "Delete records"}
     },
+    "/api/v1/cluster": {"get": {"summary": "Cluster roster (primary and secondaries)"}},
     "/api/v1/cluster/join": {"post": {"summary": "Join a secondary to this primary"}},
     "/api/v1/cluster/snapshot": {"get": {"summary": "Auth replica snapshot"}},
     "/api/v1/metrics": {"get": {"summary": "Curated in-process Prometheus snapshot"}},

@@ -110,6 +110,7 @@ RUN apt-get update \
         grep \
         gawk \
         coreutils \
+        iproute2 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /scripts

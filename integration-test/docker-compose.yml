@@ -7,6 +7,10 @@ networks:
     ipam:
       config:
         - subnet: 172.30.53.0/24
+  viewnet:
+    ipam:
+      config:
+        - subnet: 10.53.0.0/24
 
 volumes:
   primary-data:
@@ -28,6 +32,8 @@ services:
     networks:
       dnsnet:
         ipv4_address: 172.30.53.10
+      viewnet:
+        ipv4_address: 10.53.0.10
     environment:
       ZONE_SEED: /zones/db.example.com
       ZONE_LIVE: /var/lib/coredns/db.example.com
@@ -82,6 +88,8 @@ services:
     networks:
       dnsnet:
         ipv4_address: 172.30.53.30
+      viewnet:
+        ipv4_address: 10.53.0.30
     volumes:
       - ./scripts:/scripts:ro
       - primary-data:/primary-data:ro
@@ -108,3 +116,4 @@ services:
       API_PASS: integration-test-password
       METRICS_PRIMARY: http://172.30.53.10:9153/metrics
       METRICS_SECONDARY: http://172.30.53.20:9153/metrics
+      INTERNAL_DNS: 10.53.0.10

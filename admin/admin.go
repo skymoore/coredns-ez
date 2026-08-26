@@ -1,7 +1,6 @@
 package admin
 
 import (
-	"context"
 	"net/http"
 	"strings"
 	"sync"
@@ -10,7 +9,6 @@ import (
 	"github.com/coredns/coredns/plugin"
 	clog "github.com/coredns/coredns/plugin/pkg/log"
 	"github.com/coredns/coredns/plugin/transfer"
-	"github.com/coredns/coredns/request"
 	"github.com/miekg/dns"
 	"github.com/skymoore/coredns-plugins/admin/store"
 	dnsupdatepersist "github.com/skymoore/coredns-plugins/dns-update-persistent"
@@ -59,6 +57,7 @@ type Admin struct {
 
 	mu          sync.RWMutex
 	primaries   map[string]*dnsupdatepersist.UpdatePersist
+	views       map[string]map[string]*dnsupdatepersist.UpdatePersist // origin -> acl -> zonefile
 	secondaries *secondarypersist.SecondaryPersist
 
 	httpClient *http.Client
@@ -66,26 +65,6 @@ type Admin struct {
 }
 
 func (a *Admin) Name() string { return pluginName }
-
-func (a *Admin) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
-	state := request.Request{W: w, Req: r}
-	name := state.Name()
-
-	a.mu.RLock()
-	if origin := matchMap(a.primaries, name); origin != "" {
-		p := a.primaries[origin]
-		a.mu.RUnlock()
-		return p.ServeDNS(ctx, w, r)
-	}
-	sec := a.secondaries
-	a.mu.RUnlock()
-	if sec != nil {
-		if plugin.Zones(sec.Names).Matches(name) != "" {
-			return sec.ServeDNS(ctx, w, r)
-		}
-	}
-	return plugin.NextOrFailure(a.Name(), a.Next, ctx, w, r)
-}
 
 func (a *Admin) Transfer(zone string, serial uint32) (<-chan []dns.RR, error) {
 	zone = strings.ToLower(dns.CanonicalName(zone))

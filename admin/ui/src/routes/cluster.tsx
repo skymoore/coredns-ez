@@ -5,6 +5,8 @@ import { api, ApiError } from "@/lib/api";
 import type { Cluster, NodeInfo } from "@/lib/types";
 import { PageHeader } from "@/components/shell/page-header";
 import { EmptyState } from "@/components/shell/empty-state";
+import { StatusChip } from "@/components/shell/status-chip";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -15,7 +17,11 @@ import { ConfirmDialog } from "@/components/shell/confirm-dialog";
 export function ClusterPage() {
   const qc = useQueryClient();
   const node = useQuery({ queryKey: ["node"], queryFn: () => api<NodeInfo>("/node") });
-  const cluster = useQuery({ queryKey: ["cluster"], queryFn: () => api<Cluster>("/cluster") });
+  const cluster = useQuery({
+    queryKey: ["cluster"],
+    queryFn: () => api<Cluster>("/cluster"),
+    refetchInterval: 15000,
+  });
   const [join, setJoin] = useState("");
   const [del, setDel] = useState<string | null>(null);
   const [url, setUrl] = useState("");
@@ -48,11 +54,12 @@ export function ClusterPage() {
   });
   const role = node.data?.role;
   const members = cluster.data?.members ?? [];
+  const connected = Boolean(node.data?.cluster_id) || role === "primary";
   return (
     <div>
       <PageHeader
         title="Cluster"
-        description="Secondaries join with a token, then pull identity from the primary."
+        description="Primary and secondaries in this cluster. Secondaries pull identity from the primary."
         actions={
           role === "primary" ? (
             <Button onClick={() => mint.mutate()} disabled={mint.isPending}>
@@ -82,42 +89,55 @@ export function ClusterPage() {
             <Input id="token" value={token} onChange={(e) => setToken(e.target.value)} required />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="dns">Primary DNS host:port</Label>
-            <Input id="dns" value={dns} onChange={(e) => setDns(e.target.value)} placeholder="ns1.example:53" />
+            <Label htmlFor="dns">This node DNS host:port</Label>
+            <Input id="dns" value={dns} onChange={(e) => setDns(e.target.value)} placeholder="172.30.53.20:53" />
           </div>
           <Button type="submit" disabled={connect.isPending}>
             Connect
           </Button>
         </form>
       ) : null}
-      {members.length === 0 ? (
+      {!connected && members.length === 0 ? (
         <EmptyState title="No members" body="Issue a join token on the primary, then connect the secondary." />
+      ) : members.length === 0 ? (
+        <EmptyState title="Waiting for roster" body="This node has joined; the member list arrives with the next snapshot." />
       ) : (
         <div className="rounded-lg border border-border">
           <Table>
             <THead>
               <TR>
                 <TH>Name</TH>
+                <TH>Role</TH>
                 <TH>API</TH>
                 <TH>DNS</TH>
-                <TH>Joined</TH>
-                <TH />
+                <TH>Last seen</TH>
+                {role === "primary" ? <TH /> : null}
               </TR>
             </THead>
             <TBody>
               {members.map((m) => (
                 <TR key={m.id}>
-                  <TD>{m.name}</TD>
-                  <TD className="font-mono text-xs">{m.api_url}</TD>
-                  <TD className="font-mono text-xs">{m.dns_addr}</TD>
-                  <TD className="tabular">{formatTime(m.joined_at)}</TD>
-                  <TD className="text-right">
-                    {role === "primary" ? (
-                      <Button variant="ghost" size="sm" onClick={() => setDel(m.id)}>
-                        Remove
-                      </Button>
-                    ) : null}
+                  <TD>
+                    <span className="inline-flex flex-wrap items-center gap-2">
+                      <span>{m.name || m.id.slice(0, 8)}</span>
+                      {m.self ? <Badge tone="muted">this node</Badge> : null}
+                    </span>
                   </TD>
+                  <TD>
+                    <StatusChip kind={m.role} />
+                  </TD>
+                  <TD className="font-mono text-xs">{m.api_url || "—"}</TD>
+                  <TD className="font-mono text-xs">{m.dns_addr || "—"}</TD>
+                  <TD className="tabular">{formatTime(m.last_seen)}</TD>
+                  {role === "primary" ? (
+                    <TD className="text-right">
+                      {m.role !== "primary" ? (
+                        <Button variant="ghost" size="sm" onClick={() => setDel(m.id)}>
+                          Remove
+                        </Button>
+                      ) : null}
+                    </TD>
+                  ) : null}
                 </TR>
               ))}
             </TBody>
