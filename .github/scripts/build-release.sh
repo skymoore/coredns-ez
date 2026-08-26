@@ -268,7 +268,7 @@ cmd_package() {
     plugins_out="$("${PACKAGE_WORK}/${bin}" -plugins)"
     log "$plugins_out"
     local want
-    for want in dns-update-persistent ixfr secondary-persistent file secondary kubernetes; do
+    for want in dns-update-persistent ixfr admin secondary-persistent file secondary kubernetes; do
       grep -F -q "$want" <<<"$plugins_out" || die "binary is missing plugin: $want"
     done
     "${PACKAGE_WORK}/${bin}" -version

@@ -1,6 +1,6 @@
-# Build CoreDNS with the default plugin set plus this repo's plugins, and
-# publish GitHub release archives on the same platforms as
-# https://github.com/coredns/coredns/releases
+# Build CoreDNS with the default plugin set plus this repo's plugins
+# (admin UI embedded, OIDC-capable) and publish GitHub release archives
+# on the same platforms as https://github.com/coredns/coredns/releases
 #
 # Platforms (from coredns Makefile.release), each compiled in a matrix job:
 #   darwin/amd64, darwin/arm64, windows/amd64 (tgz + zip),
@@ -287,11 +287,16 @@ jobs:
         run: |
           set -euo pipefail
           cat >release.md <<EOF
-          CoreDNS **${TAG}** rebuilt with every default plugin plus the plugins in this repository:
+          Drop-in CoreDNS **${TAG}** with every default plugin plus this repository's plugins. The **admin** dashboard is compiled into the binary (React SPA on the DoH listener), with local users, API tokens, and optional OIDC.
 
-          - \`dns-update-persistent\`
-          - \`ixfr\`
-          - \`secondary-persistent\`
+          \`/dns-query\` stays DoH. The same HTTPS listener serves the UI at \`/\` and the JSON API at \`/api/v1\`.
+
+          Extra plugins in this build:
+
+          - \`admin\`: operator UI and API; password, bearer tokens, and OIDC; SQLite identity; clustering; split-horizon ACLs
+          - \`dns-update-persistent\`: RFC 2136 UPDATE with the master file rewritten in place
+          - \`ixfr\`: RFC 1995 IXFR journal for those primaries
+          - \`secondary-persistent\`: durable secondary with RFC 1035 persist
 
           - Upstream: https://github.com/coredns/coredns/releases/tag/${TAG}
           - CoreDNS commit: \`${COREDNS_COMMIT}\`
