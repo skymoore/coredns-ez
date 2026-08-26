@@ -45,6 +45,7 @@ type OIDCConfig struct {
 
 type Snapshot struct {
 	Generation  int64        `json:"generation"`
+	Password    *bool        `json:"password,omitempty"`
 	Users       []User       `json:"users"`
 	Tokens      []Token      `json:"tokens"`
 	OIDC        *OIDCConfig  `json:"oidc,omitempty"`
@@ -54,7 +55,10 @@ type Snapshot struct {
 	TSIGKeys    []TSIGKey    `json:"tsig_keys,omitempty"`
 	FilterFeeds []FilterFeed `json:"filter_feeds,omitempty"`
 	FilterRules []FilterRule `json:"filter_rules,omitempty"`
-	TransferTo  []string     `json:"transfer_to"`
+	TransferTo   []string          `json:"transfer_to"`
+	Corefile     string            `json:"corefile,omitempty"`
+	CorefileHash string            `json:"corefile_hash,omitempty"`
+	CoreFiles    map[string][]byte `json:"core_files,omitempty"`
 }
 
 func (s *Store) InsertJoinToken(hash string, ttl time.Duration) (JoinToken, error) {

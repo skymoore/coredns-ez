@@ -142,12 +142,29 @@ func (a *Admin) loadPersistedZones() error {
 	if err != nil {
 		return err
 	}
+	coreTxt := ""
+	if b, err := os.ReadFile(corefilePath()); err == nil {
+		coreTxt = string(b)
+	}
 	for _, z := range rows {
 		if z.Source != zonereg.SourceAdmin {
 			continue
 		}
 		switch z.Kind {
 		case zonereg.KindPrimary:
+			if a.cfg.Role == roleSecondary {
+				if corefileHasOrigin(coreTxt, z.Origin) {
+					continue
+				}
+				from := store.SplitCSV(z.TransferFrom)
+				if len(from) == 0 {
+					from = a.primaryTransferFrom()
+				}
+				if err := a.createSecondaryNoPersist(z.Origin, from); err != nil {
+					log.Warningf("load secondary %s: %v", z.Origin, err)
+				}
+				continue
+			}
 			d, err := dnsupdatepersist.New(z.Origin, z.PersistPath, parseMutable(store.SplitCSV(z.Mutable)))
 			if err != nil {
 				log.Warningf("load primary %s: %v", z.Origin, err)
@@ -165,6 +182,9 @@ func (a *Admin) loadPersistedZones() error {
 			a.primaries[z.Origin] = d
 			a.mu.Unlock()
 		case zonereg.KindSecondary:
+			if corefileHasOrigin(coreTxt, z.Origin) {
+				continue
+			}
 			from := store.SplitCSV(z.TransferFrom)
 			if a.cfg.PrimaryDNS != "" {
 				from = []string{a.cfg.PrimaryDNS}

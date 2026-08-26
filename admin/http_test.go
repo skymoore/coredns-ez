@@ -34,11 +34,13 @@ func testAdmin(t *testing.T) *Admin {
 		db:               st,
 		primaries:        map[string]*dnsupdatepersist.UpdatePersist{},
 		views:            map[string]map[string]*dnsupdatepersist.UpdatePersist{},
+		httpClient:       &http.Client{},
 		stop:             make(chan struct{}),
 		tsig:             newTSIGHub(),
 		filters:          newFilterEngine(),
 		filterAllowLocal: true,
 		xferHub:          newXferHub(),
+		skipReload:       true,
 	}
 	a.mux = a.routes()
 	t.Cleanup(func() { close(a.stop) })
@@ -325,13 +327,78 @@ func TestMetricsAndAudit(t *testing.T) {
 	}
 }
 
-func TestClusterConnectRejectedOnPrimary(t *testing.T) {
+func TestProxyDoesNotForwardLogin(t *testing.T) {
+	a := testAdmin(t)
+	a.cfg.Role = roleSecondary
+	if err := a.db.SetMeta(store.MetaPrimaryURL, "http://127.0.0.1:1"); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(map[string]string{"username": "admin", "password": "wrong"})
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	a.mux.ServeHTTP(w, r)
+	if w.Code == http.StatusBadGateway || w.Code == http.StatusServiceUnavailable {
+		t.Fatalf("login must stay on this node, got %d %s", w.Code, w.Body.Bytes())
+	}
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong password: %d %s", w.Code, w.Body.Bytes())
+	}
+}
+
+func TestAuthConfigPasswordFromMeta(t *testing.T) {
+	a := testAdmin(t)
+	a.cfg.Password = true
+	if err := a.db.SetMeta(store.MetaPassword, "off"); err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/auth/config", nil)
+	w := httptest.NewRecorder()
+	a.mux.ServeHTTP(w, r)
+	if w.Code != http.StatusOK || !bytes.Contains(w.Body.Bytes(), []byte(`"password":false`)) {
+		t.Fatalf("meta password off: %d %s", w.Code, w.Body.Bytes())
+	}
+}
+
+func TestClusterConnectRequiresAdminWhenUsersExist(t *testing.T) {
 	a := testAdmin(t)
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/cluster/connect", bytes.NewReader([]byte(`{"url":"http://x","token":"t"}`)))
 	r.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	a.mux.ServeHTTP(w, r)
-	if w.Code != http.StatusForbidden {
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("unauth connect: %d %s", w.Code, w.Body.Bytes())
+	}
+}
+
+func TestClusterConnectStandalonePrimaryNotForbidden(t *testing.T) {
+	a := testAdmin(t)
+	tok := loginToken(t, a)
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/cluster/connect", bytes.NewReader([]byte(`{"url":"http://127.0.0.1:1","token":"t"}`)))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Authorization", "Bearer "+tok)
+	w := httptest.NewRecorder()
+	a.mux.ServeHTTP(w, r)
+	if w.Code == http.StatusForbidden {
+		t.Fatalf("standalone primary must be allowed to join, got %d %s", w.Code, w.Body.Bytes())
+	}
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("want 502 from unreachable primary, got %d %s", w.Code, w.Body.Bytes())
+	}
+}
+
+func TestClusterConnectRejectedWhenHasSecondary(t *testing.T) {
+	a := testAdmin(t)
+	if _, err := a.db.InsertMember(store.Member{Name: "ns2", Role: store.MemberSecondary, SecretHash: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	tok := loginToken(t, a)
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/cluster/connect", bytes.NewReader([]byte(`{"url":"http://x","token":"t"}`)))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Authorization", "Bearer "+tok)
+	w := httptest.NewRecorder()
+	a.mux.ServeHTTP(w, r)
+	if w.Code != http.StatusConflict {
 		t.Fatalf("code=%d body=%s", w.Code, w.Body.Bytes())
 	}
 }

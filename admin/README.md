@@ -92,7 +92,7 @@ cookie `coredns_admin_session`, except:
 * `GET /api/v1/auth/oidc/callback`
 * `POST /api/v1/cluster/join` (join token)
 * `GET /api/v1/cluster/snapshot` (member secret)
-* `POST /api/v1/cluster/connect` on a secondary that has not joined yet (`url` + `token`); the Cluster UI mints the token on the primary and pastes it here
+* `POST /api/v1/cluster/connect` (`url` + `token`) on a node that has not joined yet. Empty-db secondaries may call it without a session. A default install is a standalone primary: an admin session can join from Cluster without changing the Corefile `role`. A primary that already has secondaries cannot join.
 
 Roles: `admin`, `operator`, `viewer`.
 
@@ -105,7 +105,7 @@ Authenticated JSON for the UI:
 * `GET|PUT /api/v1/transfer` extra AXFR IPs (unioned with Corefile `transfer { to }`). IPs only; `*` is rejected. Cluster join appends the secondary DNS address.
 * `GET /api/v1/backup` zip of sqlite, zone files, Corefile, and tls (operator+). Host install puts those trees in `/etc/coredns` and `/var/lib/coredns` owned by `coredns`.
 * `GET|POST /api/v1/update` GitHub release check / self-update (POST is admin; linux only). The running binary’s directory must be writable (`install.sh` places it at `/var/lib/coredns/coredns` and supervises a clean exit so bind capability is restored).
-* Cluster: on the primary, **Add a secondary** mints a one-time join key. On a new `role secondary` instance, Cluster → paste primary URL + key. Identity (users, tokens, TSIG keys, zone list) replicates; zone data is AXFRed from `advertise`.
+* Cluster: on the primary, **Add a secondary** mints a one-time join key. On the new node (including a default `role primary` install), Cluster → **Join an existing cluster** and paste the URL + key. Set **This node name** (for example `ns3.dns.rwx.dev`); on the primary, **Rename** edits it later. `COREDNS_NODE_NAME` is the default when joining from Docker. That node becomes a secondary (stored in sqlite so it survives restart). The primary Corefile is copied and rewritten: `role secondary`, `advertise` becomes `dns` (the primary’s DNS), `bind` uses this node’s IP, `db`/`data` stay local, OIDC `redirect_url` is this node’s callback (register it on the IdP). `dns-update-persistent` and `file` zone blocks become `secondary-persistent` (AXFR from the primary, persist the same paths). Referenced zone and TLS files are seeded, then CoreDNS restarts. Users/tokens/TSIG still replicate in sqlite. Login is local, not proxied. If the primary Corefile uses `{$ENV}` secrets, set the same variables on the secondary.
 
 Zone transfers (AXFR/IXFR) are **not** gated by the admin login. The CoreDNS `transfer` plugin allows AXFR from every address in `transfer { to ... }` plus extra IPs from `PUT /api/v1/transfer`. `to *` means anyone who can reach the DNS port can copy the zone. Product Corefiles use `to 127.0.0.1` only. TSIG is not required for AXFR unless the Corefile `tsig` plugin has `require AXFR`.
 

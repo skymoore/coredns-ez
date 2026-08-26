@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api";
@@ -44,6 +44,9 @@ export function ClusterPage() {
   const [url, setUrl] = useState("");
   const [token, setToken] = useState("");
   const [dns, setDns] = useState("");
+  const [nodeName, setNodeName] = useState("");
+  const [joinOpen, setJoinOpen] = useState(false);
+  const [rename, setRename] = useState<{ id: string; name: string } | null>(null);
 
   const mint = useMutation({
     mutationFn: () =>
@@ -52,12 +55,33 @@ export function ClusterPage() {
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "failed"),
   });
   const connect = useMutation({
-    mutationFn: () => api("/cluster/connect", { method: "POST", body: JSON.stringify({ url, token, dns }) }),
+    mutationFn: () =>
+      api("/cluster/connect", {
+        method: "POST",
+        body: JSON.stringify({
+          url,
+          token,
+          dns,
+          name: nodeName.trim(),
+          api_url: window.location.origin,
+        }),
+      }),
     onSuccess: () => {
       toast.success("Joined. Zones are transferring from the primary.");
       qc.invalidateQueries();
     },
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "connect failed"),
+  });
+  const renameMut = useMutation({
+    mutationFn: () =>
+      api(`/cluster/members/${rename?.id}`, { method: "PATCH", body: JSON.stringify({ name: rename?.name.trim() }) }),
+    onSuccess: () => {
+      toast.success("Name updated");
+      qc.invalidateQueries({ queryKey: ["cluster"] });
+      qc.invalidateQueries({ queryKey: ["node"] });
+      setRename(null);
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "rename failed"),
   });
   const remove = useMutation({
     mutationFn: (id: string) => api(`/cluster/members/${id}`, { method: "DELETE" }),
@@ -73,11 +97,17 @@ export function ClusterPage() {
   const joined = Boolean(node.data?.cluster_id);
   const zoneRows = zones.data?.zones ?? [];
 
+  useEffect(() => {
+    if (!nodeName && node.data?.name) {
+      setNodeName(node.data.name);
+    }
+  }, [node.data?.name, nodeName]);
+
   return (
     <div>
       <PageHeader
         title="Cluster"
-        description="Mint a one-time join key on the primary. On a new secondary, paste it here to pull identity and AXFR every zone."
+        description="A new box can mint join keys as a primary, or paste a key here to join an existing cluster as a secondary. You do not need to edit the Corefile role."
         actions={
           role === "primary" ? (
             <Button
@@ -104,11 +134,8 @@ export function ClusterPage() {
             {issued ? (
               <div className="space-y-4 text-sm">
                 <ol className="list-decimal space-y-2 pl-4">
-                  <li>
-                    Start the new instance with <span className="font-mono">role secondary</span> in its admin block.
-                    Sign in as the bootstrap admin.
-                  </li>
-                  <li>Open Cluster on that node and paste the primary URL and this join key.</li>
+                  <li>On the new node, sign in and open Cluster (a default install is a standalone primary; that is fine).</li>
+                  <li>Paste this primary URL and join key. Set the node name (for example ns3.dns.rwx.dev) and its DNS host:port.</li>
                   <li>
                     Set its DNS <span className="font-mono">host:port</span> to the address this primary should NOTIFY
                     {issued.advertise_dns ? ` (this primary advertises ${issued.advertise_dns})` : ""}.
@@ -150,18 +177,23 @@ export function ClusterPage() {
         </Dialog>
       ) : null}
 
-      {role === "secondary" && !joined ? (
+      {!joined ? (
         <form
           className="mb-6 max-w-lg space-y-3 rounded-lg border border-border p-4"
           onSubmit={(e) => {
             e.preventDefault();
+            if (role === "primary") {
+              setJoinOpen(true);
+              return;
+            }
             connect.mutate();
           }}
         >
-          <h2 className="font-semibold">Join a primary</h2>
+          <h2 className="font-semibold">Join an existing cluster</h2>
           <p className="text-sm text-muted-foreground">
-            Paste the join key minted on the primary. This node will copy users, TSIG keys, and start AXFR for every
-            zone.
+            Paste a join key minted on the other primary. This node becomes a secondary: users, tokens, and TSIG keys
+            are replaced with that cluster’s, and every zone is AXFRed. Local zones you created here are not copied
+            the other way.
           </p>
           <div className="space-y-2">
             <Label htmlFor="url">Primary API URL</Label>
@@ -169,13 +201,23 @@ export function ClusterPage() {
               id="url"
               value={url}
               onChange={(e) => setUrl(e.target.value)}
-              placeholder="https://ns1.example.net:443"
+              placeholder="https://ns1.dns.rwx.dev"
               required
             />
           </div>
           <div className="space-y-2">
             <Label htmlFor="token">Join key</Label>
             <Input id="token" value={token} onChange={(e) => setToken(e.target.value)} required className="font-mono" />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="nodeName">This node name</Label>
+            <Input
+              id="nodeName"
+              value={nodeName}
+              onChange={(e) => setNodeName(e.target.value)}
+              placeholder="ns3.dns.rwx.dev"
+            />
+            <p className="text-xs text-muted-foreground">Shown in the cluster roster. Defaults to this host’s hostname.</p>
           </div>
           <div className="space-y-2">
             <Label htmlFor="dns">This node DNS host:port</Label>
@@ -194,10 +236,10 @@ export function ClusterPage() {
 
       {members.length === 0 ? (
         <EmptyState
-          title={role === "secondary" && !joined ? "Not joined" : "No members yet"}
+          title={!joined ? "Not in a cluster yet" : "No members yet"}
           body={
-            role === "primary"
-              ? "Generate a join key, then connect the new instance from its Cluster page."
+            !joined
+              ? "Mint a join key to add other boxes to this node, or paste a key above to join a cluster as a secondary."
               : "After you join, the roster arrives with the first snapshot."
           }
         />
@@ -231,6 +273,9 @@ export function ClusterPage() {
                   <TD className="tabular">{formatTime(m.last_seen)}</TD>
                   {role === "primary" ? (
                     <TD className="text-right">
+                      <Button variant="ghost" size="sm" onClick={() => setRename({ id: m.id, name: m.name || "" })}>
+                        Rename
+                      </Button>
                       {m.role !== "primary" ? (
                         <Button variant="ghost" size="sm" onClick={() => setDel(m.id)}>
                           Remove
@@ -279,6 +324,47 @@ export function ClusterPage() {
 
       {role === "primary" ? <TransferCard canEdit /> : null}
 
+      <Dialog open={!!rename} onOpenChange={(v) => !v && setRename(null)}>
+        <DialogContent title="Rename node" className="w-[min(28rem,calc(100%-2rem))]">
+          <form
+            className="space-y-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (rename?.name.trim()) {
+                renameMut.mutate();
+              }
+            }}
+          >
+            <div className="space-y-2">
+              <Label htmlFor="rename">Cluster name</Label>
+              <Input
+                id="rename"
+                value={rename?.name ?? ""}
+                onChange={(e) => setRename((r) => (r ? { ...r, name: e.target.value } : r))}
+                placeholder="ns3.dns.rwx.dev"
+                required
+              />
+            </div>
+            <div className="flex justify-end">
+              <Button type="submit" disabled={renameMut.isPending || !rename?.name.trim()}>
+                Save
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+      <ConfirmDialog
+        open={joinOpen}
+        onOpenChange={setJoinOpen}
+        title="Join as a secondary?"
+        body="This node will stop being a cluster primary. Users and TSIG keys on this box are replaced with the other primary’s. Zone files already here are not uploaded."
+        confirmLabel="Join cluster"
+        onConfirm={() => {
+          setJoinOpen(false);
+          connect.mutate();
+        }}
+        busy={connect.isPending}
+      />
       <ConfirmDialog
         open={!!del}
         onOpenChange={(v) => !v && setDel(null)}

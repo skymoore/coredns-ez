@@ -198,8 +198,12 @@ func (a *Admin) handleAuthConfig(w http.ResponseWriter, _ *http.Request) {
 			image = a.cfg.OIDC.ButtonImage
 		}
 	}
+	password := a.cfg.Password
+	if v, err := a.db.Meta(store.MetaPassword); err == nil && v != "" {
+		password = v == "on"
+	}
 	out := map[string]any{
-		"password":    a.cfg.Password,
+		"password":    password,
 		"oidc":        oidcOn,
 		"oidc_issuer": issuer,
 	}

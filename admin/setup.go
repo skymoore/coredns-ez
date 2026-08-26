@@ -152,9 +152,16 @@ func newAdmin(cfg coreConfig) (*Admin, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := db.SetMeta(store.MetaRole, cfg.Role); err != nil {
+	if err := applyPersistedRole(&cfg, db); err != nil {
 		_ = db.Close()
 		return nil, err
+	}
+	if cfg.Role != roleSecondary {
+		v := "off"
+		if cfg.Password {
+			v = "on"
+		}
+		_ = db.SetMeta(store.MetaPassword, v)
 	}
 	if cfg.AdvertiseDNS != "" {
 		_ = db.SetMeta(store.MetaAdvertise, cfg.AdvertiseDNS)
@@ -251,9 +258,21 @@ func newAdmin(cfg coreConfig) (*Admin, error) {
 				return nil, fmt.Errorf("join: %w", err)
 			}
 		}
-		go a.pullLoop()
+		a.startPull()
 	}
 	return a, nil
+}
+
+// A standalone primary that joined a cluster stores role=secondary in sqlite so
+// a Corefile that still says `role primary` (the installer default) comes back
+// up as a secondary after restart.
+func applyPersistedRole(cfg *coreConfig, db *store.Store) error {
+	existing, err := db.Meta(store.MetaRole)
+	if err == nil && existing == roleSecondary {
+		cfg.Role = roleSecondary
+		return nil
+	}
+	return db.SetMeta(store.MetaRole, cfg.Role)
 }
 
 func (a *Admin) sameConfig(cfg coreConfig) error {

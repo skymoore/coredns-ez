@@ -1,11 +1,13 @@
 package admin
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/coredns/caddy"
 	"github.com/coredns/coredns/core/dnsserver"
+	"github.com/skymoore/coredns-ez/admin/store"
 )
 
 func TestParseAdmin(t *testing.T) {
@@ -30,6 +32,25 @@ func TestParseAdmin(t *testing.T) {
 	}
 	if !cfg.Password {
 		t.Fatal("password login defaults on")
+	}
+}
+
+func TestApplyPersistedRoleKeepsSecondary(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "api.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	if err := st.SetMeta(store.MetaRole, roleSecondary); err != nil {
+		t.Fatal(err)
+	}
+	cfg := coreConfig{Role: rolePrimary}
+	if err := applyPersistedRole(&cfg, st); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Role != roleSecondary {
+		t.Fatalf("role %q", cfg.Role)
 	}
 }
 

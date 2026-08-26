@@ -38,7 +38,42 @@ func newOIDC(ctx context.Context, c oidcSettings) (*oidcRuntime, error) {
 	}, nil
 }
 
+func (a *Admin) oidcRedirectURL(r *http.Request) string {
+	if a.cfg.OIDC != nil && strings.TrimSpace(a.cfg.OIDC.RedirectURL) != "" {
+		return a.cfg.OIDC.RedirectURL
+	}
+	return requestBaseURL(r) + "/api/v1/auth/oidc/callback"
+}
+
+func (a *Admin) oauthForRequest(r *http.Request) oauth2.Config {
+	oc := a.oidc.oauth
+	oc.RedirectURL = a.oidcRedirectURL(r)
+	return oc
+}
+
+func (a *Admin) reloadOIDCFromDB() {
+	if a.cfg.OIDC != nil {
+		return
+	}
+	oc, err := a.db.GetOIDC()
+	if err != nil {
+		return
+	}
+	rt, err := newOIDC(context.Background(), oidcSettings{
+		Issuer: oc.Issuer, ClientID: oc.ClientID, ClientSecret: oc.ClientSecret,
+		RedirectURL: oc.RedirectURL, ButtonText: oc.ButtonText, ButtonImage: oc.ButtonImage,
+	})
+	if err != nil {
+		log.Warningf("oidc reload: %v", err)
+		return
+	}
+	a.oidc = rt
+}
+
 func (a *Admin) handleOIDCLogin(w http.ResponseWriter, r *http.Request) {
+	if a.oidc == nil {
+		a.reloadOIDCFromDB()
+	}
 	if a.oidc == nil {
 		writeError(w, http.StatusNotFound, "oidc not configured")
 		return
@@ -49,11 +84,15 @@ func (a *Admin) handleOIDCLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "state")
 		return
 	}
-	u := a.oidc.oauth.AuthCodeURL(state, oidc.Nonce(nonce))
+	oc := a.oauthForRequest(r)
+	u := oc.AuthCodeURL(state, oidc.Nonce(nonce))
 	http.Redirect(w, r, u, http.StatusFound)
 }
 
 func (a *Admin) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
+	if a.oidc == nil {
+		a.reloadOIDCFromDB()
+	}
 	if a.oidc == nil {
 		writeError(w, http.StatusNotFound, "oidc not configured")
 		return
@@ -68,7 +107,8 @@ func (a *Admin) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid state")
 		return
 	}
-	tok, err := a.oidc.oauth.Exchange(r.Context(), r.URL.Query().Get("code"))
+	oc := a.oauthForRequest(r)
+	tok, err := oc.Exchange(r.Context(), r.URL.Query().Get("code"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "code exchange")
 		return

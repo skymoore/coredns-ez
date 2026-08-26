@@ -64,6 +64,7 @@ export function SettingsPage({ me }: { me: Actor }) {
     ["Username", me.username],
     ["Role", me.role],
     ["Node", n?.id ?? ""],
+    ["Cluster name", n?.name ?? ""],
     ["Version", n?.version ?? u?.current ?? ""],
     ["Instance role", n?.role ?? ""],
     ["Cluster", n?.cluster_id || "none"],

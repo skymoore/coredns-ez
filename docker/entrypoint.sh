@@ -30,9 +30,13 @@ while [ "$i" -lt 30 ]; do
 done
 
 dns="${COREDNS_ADVERTISE_DNS:-}"
+name="${COREDNS_NODE_NAME:-}"
 payload="{\"url\":\"${COREDNS_JOIN_URL}\",\"token\":\"${COREDNS_JOIN_TOKEN}\""
 if [ -n "$dns" ]; then
 	payload="${payload},\"dns\":\"${dns}\""
+fi
+if [ -n "$name" ]; then
+	payload="${payload},\"name\":\"${name}\""
 fi
 payload="${payload}}"
 if wget -qO- --header='Content-Type: application/json' --post-data="$payload" \

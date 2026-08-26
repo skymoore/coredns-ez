@@ -17,6 +17,7 @@ export type AuthConfig = {
 
 export type NodeInfo = {
   id: string;
+  name?: string;
   role: "primary" | "secondary";
   cluster_id: string;
   advertise_dns: string;

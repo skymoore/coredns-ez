@@ -91,6 +91,7 @@ func (a *Admin) routes() http.Handler {
 			r.Get("/cluster", requireRole(store.RoleAdmin, a.handleGetCluster))
 			r.Post("/cluster/join-tokens", requireRole(store.RoleAdmin, a.handleCreateJoinToken))
 			r.Get("/cluster/members", requireRole(store.RoleAdmin, a.handleListMembers))
+			r.Patch("/cluster/members/{id}", requireRole(store.RoleAdmin, a.handlePatchMember))
 			r.Delete("/cluster/members/{id}", requireRole(store.RoleAdmin, a.handleDeleteMember))
 		})
 
@@ -154,6 +155,7 @@ func (a *Admin) handleNode(w http.ResponseWriter, _ *http.Request) {
 	adv, _ := a.db.Meta(store.MetaAdvertise)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id":            nodeID,
+		"name":          a.nodeName(),
 		"role":          a.cfg.Role,
 		"cluster_id":    clusterID,
 		"advertise_dns": adv,

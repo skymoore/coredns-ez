@@ -545,7 +545,8 @@ verify_running() {
 		printf '--- /var/log/coredns.log ---\n' >&2
 		tail -n 40 /var/log/coredns.log >&2
 	fi
-	die "check ${CONF_DIR}/Corefile and $(secret_hint); then rc-service coredns start / systemctl start coredns"
+	print_login
+	die "check ${CONF_DIR}/Corefile and $(secret_file); then rc-service coredns start / systemctl start coredns"
 }
 
 rand_password() {
@@ -596,12 +597,35 @@ ensure_bootstrap_password() {
 	BOOTSTRAP_PW=$pw
 }
 
-secret_hint() {
+secret_file() {
 	if [ "$OS" = alpine ]; then
-		printf '/etc/conf.d/coredns (use export VAR=)'
+		printf '/etc/conf.d/coredns'
 	else
 		printf '/etc/default/coredns'
 	fi
+}
+
+ui_host() {
+	ip=$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n 1)
+	if [ -n "$ip" ]; then
+		printf '%s' "$ip"
+		return
+	fi
+	hostname 2>/dev/null || printf 'HOST'
+}
+
+print_login() {
+	printf '\nLog in to the admin UI:\n'
+	printf '  URL:      http://%s:8080\n' "$(ui_host)"
+	printf '  Username: admin\n'
+	if [ -n "${BOOTSTRAP_PW:-}" ]; then
+		printf '  Password: %s\n' "$BOOTSTRAP_PW"
+		printf 'Save this password. It is also in %s. Change it after the first login.\n' "$(secret_file)"
+	else
+		printf '  Password: your existing admin account\n'
+		printf 'The first-run secret, if still present, is in %s.\n' "$(secret_file)"
+	fi
+	printf '\n'
 }
 
 need_root
@@ -638,15 +662,14 @@ fi
 write_service
 install_binary
 ensure_bootstrap_password
+if [ -n "${BOOTSTRAP_PW:-}" ]; then
+	printf 'Admin UI login: user admin  password %s\n' "$BOOTSTRAP_PW"
+fi
 enable_service
 restart_or_start
 printf 'binary %s at %s/coredns (symlink %s/bin/coredns)\n' "$VERSION" "$LIB_DIR" "$PREFIX"
 printf 'Corefile: %s/Corefile\n' "$CONF_DIR"
-if [ -n "${GENERATED_BOOTSTRAP:-}" ] && [ -n "${BOOTSTRAP_PW:-}" ]; then
-	printf 'Admin UI: http://<host>:8080  user admin  password %s (saved in %s)\n' "$BOOTSTRAP_PW" "$(secret_hint)"
-else
-	printf 'Admin UI: http://<host>:8080  user admin. Bootstrap password: %s\n' "$(secret_hint)"
-fi
+print_login
 printf 'Settings → Backup and Settings → Update work against this layout.\n'
 printf 'AXFR is localhost-only until you add secondary IPs in the UI.\n'
 if want_unbound; then

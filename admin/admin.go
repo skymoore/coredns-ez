@@ -74,6 +74,9 @@ type Admin struct {
 	filterSyncMu     sync.Mutex
 	filterSyncing    map[string]struct{}
 	xferHub          *xferHub
+	pullOnce         sync.Once
+	skipReload       bool
+	pendingReload    bool
 }
 
 func (a *Admin) Name() string { return pluginName }
