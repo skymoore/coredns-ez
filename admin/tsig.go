@@ -8,7 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/miekg/dns"
-	"github.com/skymoore/coredns-plugins/admin/store"
+	"github.com/skymoore/coredns-ez/admin/store"
 )
 
 func normalizeTSIGName(name string) (string, error) {

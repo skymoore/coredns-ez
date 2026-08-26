@@ -7,7 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/miekg/dns"
-	"github.com/skymoore/coredns-plugins/internal/zonereg"
+	"github.com/skymoore/coredns-ez/internal/zonereg"
 )
 
 type recordJSON struct {

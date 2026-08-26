@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/skymoore/coredns-plugins/admin/store"
+	"github.com/skymoore/coredns-ez/admin/store"
 )
 
 func (a *Admin) handleListTokens(w http.ResponseWriter, r *http.Request) {

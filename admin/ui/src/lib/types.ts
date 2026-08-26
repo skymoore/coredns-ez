@@ -69,6 +69,36 @@ export type Token = {
   secret?: string;
 };
 
+export type FilterAction = "allow" | "block";
+
+export type FilterRule = {
+  id: string;
+  action: FilterAction;
+  pattern: string;
+  kids_only: boolean;
+  source: string;
+  created_at: number;
+};
+
+export type FilterFeed = {
+  id: string;
+  name: string;
+  action: FilterAction;
+  url: string;
+  sync: "periodic" | "off";
+  interval_seconds: number;
+  last_sync_at?: number | null;
+  last_error?: string;
+  last_count: number;
+  created_at: number;
+};
+
+export type FilterState = {
+  manual: FilterRule[];
+  feeds: FilterFeed[];
+  counts: { allow?: number; block?: number };
+};
+
 export type TsigKey = {
   id: string;
   name: string;
@@ -101,6 +131,12 @@ export type Cluster = {
   role: string;
   self_id?: string;
   members: Member[];
+};
+
+export type TransferACL = {
+  to: string[];
+  corefile: string[];
+  effective: string[];
 };
 
 export type AuditRow = {

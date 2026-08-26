@@ -11,8 +11,8 @@ import (
 	"github.com/coredns/coredns/plugin"
 	"github.com/coredns/coredns/plugin/file"
 	"github.com/coredns/coredns/plugin/transfer"
-	"github.com/skymoore/coredns-plugins/internal/zonereg"
-	"github.com/skymoore/coredns-plugins/ixfr"
+	"github.com/skymoore/coredns-ez/internal/zonereg"
+	"github.com/skymoore/coredns-ez/ixfr"
 
 	"github.com/miekg/dns"
 )

@@ -1,0 +1,36 @@
+name: coredns
+
+# First run:
+#   docker compose up --build
+# UI: http://127.0.0.1:8080  user admin / password from COREDNS_ADMIN_BOOTSTRAP_PASSWORD
+#
+# Host :53 is often taken (systemd-resolved, mDNS). Change the left-hand
+# side to 5353 if bind fails.
+# Prometheus is 127.0.0.1:9153 inside the container. Map it only if you need it:
+#   - "9153:9153"
+
+services:
+  coredns:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/skymoore/coredns-ez:local
+    restart: unless-stopped
+    ports:
+      - "53:53/udp"
+      - "53:53/tcp"
+      - "8080:8080"
+    environment:
+      COREDNS_ADMIN_BOOTSTRAP_PASSWORD: ${COREDNS_ADMIN_BOOTSTRAP_PASSWORD:-changeme}
+      TZ: UTC
+    volumes:
+      - coredns-data:/var/lib/coredns
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/api/v1/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 8
+      start_period: 8s
+
+volumes:
+  coredns-data:

@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/skymoore/coredns-plugins/admin/store"
+	"github.com/skymoore/coredns-ez/admin/store"
 )
 
 func (a *Admin) maybeProxy(next http.Handler) http.Handler {

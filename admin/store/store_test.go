@@ -90,6 +90,23 @@ func TestUsersAndSnapshot(t *testing.T) {
 	if err != nil || len(acls) != 1 || acls[0].Name != "internal" {
 		t.Fatalf("replica acls %+v %v", acls, err)
 	}
+	if _, err := s.InsertFilterRule(FilterRule{Action: FilterBlock, Pattern: "ads.example.com.", Source: FilterSourceManual}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.InsertFilterFeed(FilterFeed{Name: "hosts", Action: FilterBlock, URL: "https://example.com/hosts.txt", Sync: FilterSyncPeriodic}); err != nil {
+		t.Fatal(err)
+	}
+	snap3, err := s.Snapshot()
+	if err != nil || len(snap3.FilterRules) != 1 || len(snap3.FilterFeeds) != 1 {
+		t.Fatalf("filter snapshot %+v %v", snap3, err)
+	}
+	if err := s2.ApplySnapshot(snap3); err != nil {
+		t.Fatal(err)
+	}
+	fr, err := s2.ListFilterRules("", "")
+	if err != nil || len(fr) != 1 || fr[0].Pattern != "ads.example.com." {
+		t.Fatalf("replica filter rules %+v %v", fr, err)
+	}
 
 	raw, err := json.Marshal(snap)
 	if err != nil {

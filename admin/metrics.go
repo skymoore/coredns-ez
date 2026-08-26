@@ -34,4 +34,18 @@ var (
 		Name:      "zones",
 		Help:      "Registered zones by kind and source.",
 	}, []string{"kind", "source"})
+
+	filterHitCount = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: plugin.Namespace,
+		Subsystem: "admin",
+		Name:      "filter_hits_total",
+		Help:      "DNS names answered NXDOMAIN by the block list.",
+	}, []string{"action"})
+
+	filterRuleGauge = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: plugin.Namespace,
+		Subsystem: "admin",
+		Name:      "filter_rules",
+		Help:      "Compiled filter rules by action.",
+	}, []string{"action"})
 )

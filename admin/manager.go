@@ -8,11 +8,11 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
-	"github.com/skymoore/coredns-plugins/admin/store"
-	dnsupdatepersist "github.com/skymoore/coredns-plugins/dns-update-persistent"
-	"github.com/skymoore/coredns-plugins/internal/zonereg"
-	"github.com/skymoore/coredns-plugins/ixfr"
-	secondarypersist "github.com/skymoore/coredns-plugins/secondary-persistent"
+	"github.com/skymoore/coredns-ez/admin/store"
+	dnsupdatepersist "github.com/skymoore/coredns-ez/dns-update-persistent"
+	"github.com/skymoore/coredns-ez/internal/zonereg"
+	"github.com/skymoore/coredns-ez/ixfr"
+	secondarypersist "github.com/skymoore/coredns-ez/secondary-persistent"
 )
 
 func persistName(origin string) string {

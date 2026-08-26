@@ -1,0 +1,8 @@
+# Terminate TLS in front of CoreDNS HTTP on loopback.
+# Keep CoreDNS :8080 unpublished. Point DNS at this host for the UI hostname.
+#
+#   caddy run --config docker/Caddyfile
+
+dns.example.com {
+	reverse_proxy 127.0.0.1:8080
+}

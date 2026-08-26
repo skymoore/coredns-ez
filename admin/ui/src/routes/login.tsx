@@ -49,9 +49,12 @@ export function LoginPage() {
           <img src={icon} alt="" className="h-10 w-10" />
           <span className="text-xl font-bold">CoreDNS</span>
         </div>
-        <p className="max-w-[22rem] text-lg leading-snug">
-          DNS and service discovery. Manage zones, records, and cluster identity on this node.
-        </p>
+        <div className="space-y-3">
+          <p className="text-sm text-[#f6f4fb]/70">Unofficial build · skymoore/coredns-ez</p>
+          <p className="max-w-[22rem] text-lg leading-snug">
+            DNS and service discovery. Manage zones, records, and cluster identity on this node.
+          </p>
+        </div>
       </div>
       <div className="flex items-center justify-center px-4 py-12">
         <div className="w-full max-w-sm space-y-4">
@@ -59,6 +62,7 @@ export function LoginPage() {
             <img src={icon} alt="" className="h-8 w-8" />
             <span className="font-bold">CoreDNS</span>
           </div>
+          <p className="text-xs text-muted-foreground">Unofficial build · skymoore/coredns-ez</p>
           <h1 className="text-[22px] font-bold">Sign in</h1>
           {!ready ? <p className="text-sm text-muted-foreground">Loading sign-in options.</p> : null}
           {ready && passwordOn ? (

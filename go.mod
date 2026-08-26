@@ -1,4 +1,4 @@
-module github.com/skymoore/coredns-plugins
+module github.com/skymoore/coredns-ez
 
 go 1.25.0
 

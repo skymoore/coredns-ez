@@ -3,7 +3,7 @@
 # GOOS/GOARCH binary the same way coredns Makefile.release does.
 set -euo pipefail
 
-PLUGIN_MODULE="github.com/skymoore/coredns-plugins"
+PLUGIN_MODULE="github.com/skymoore/coredns-ez"
 COREDNS_REPO="https://github.com/coredns/coredns.git"
 GOTAGS="${GOTAGS:-grpcnotrace}"
 

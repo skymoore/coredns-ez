@@ -13,8 +13,8 @@ import (
 
 	"github.com/coredns/coredns/plugin/test"
 	"github.com/miekg/dns"
-	dnsupdatepersist "github.com/skymoore/coredns-plugins/dns-update-persistent"
-	"github.com/skymoore/coredns-plugins/internal/zonereg"
+	dnsupdatepersist "github.com/skymoore/coredns-ez/dns-update-persistent"
+	"github.com/skymoore/coredns-ez/internal/zonereg"
 )
 
 func TestACLAndSplitHorizonServe(t *testing.T) {

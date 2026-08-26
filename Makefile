@@ -1,4 +1,4 @@
-.PHONY: ui test
+.PHONY: ui test docker
 
 ui:
 	npm --prefix admin/ui ci
@@ -6,3 +6,6 @@ ui:
 
 test:
 	go test ./...
+
+docker:
+	docker build -t ghcr.io/skymoore/coredns-ez:local .

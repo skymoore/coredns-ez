@@ -55,19 +55,19 @@ WORKDIR /src/coredns
 # in-tree plugins they replace rather than at the end (COREDNS_PLUGINS
 # would append them after whoami/forward, which is the wrong slot).
 RUN sed -i \
-    -e '/^file:file$/a dns-update-persistent:github.com/skymoore/coredns-plugins/dns-update-persistent' \
+    -e '/^file:file$/a dns-update-persistent:github.com/skymoore/coredns-ez/dns-update-persistent' \
     plugin.cfg \
     && sed -i \
-    -e '/^dns-update-persistent:/a ixfr:github.com/skymoore/coredns-plugins/ixfr' \
+    -e '/^dns-update-persistent:/a ixfr:github.com/skymoore/coredns-ez/ixfr' \
     plugin.cfg \
     && sed -i \
-    -e '/^ixfr:/a admin:github.com/skymoore/coredns-plugins/admin' \
+    -e '/^ixfr:/a admin:github.com/skymoore/coredns-ez/admin' \
     plugin.cfg \
     && sed -i \
-    -e '/^secondary:secondary$/a secondary-persistent:github.com/skymoore/coredns-plugins/secondary-persistent' \
+    -e '/^secondary:secondary$/a secondary-persistent:github.com/skymoore/coredns-ez/secondary-persistent' \
     plugin.cfg \
     && git apply /plugins/patches/coredns-http-handler.patch \
-    && printf '\nreplace github.com/skymoore/coredns-plugins => /plugins\n' >> go.mod \
+    && printf '\nreplace github.com/skymoore/coredns-ez => /plugins\n' >> go.mod \
     && printf '\nreplace github.com/coredns/coredns => /src/coredns\n' >> /plugins/go.mod
 
 RUN --mount=type=cache,target=/go/pkg/mod \

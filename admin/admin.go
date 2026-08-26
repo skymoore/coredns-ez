@@ -10,9 +10,9 @@ import (
 	clog "github.com/coredns/coredns/plugin/pkg/log"
 	"github.com/coredns/coredns/plugin/transfer"
 	"github.com/miekg/dns"
-	"github.com/skymoore/coredns-plugins/admin/store"
-	dnsupdatepersist "github.com/skymoore/coredns-plugins/dns-update-persistent"
-	secondarypersist "github.com/skymoore/coredns-plugins/secondary-persistent"
+	"github.com/skymoore/coredns-ez/admin/store"
+	dnsupdatepersist "github.com/skymoore/coredns-ez/dns-update-persistent"
+	secondarypersist "github.com/skymoore/coredns-ez/secondary-persistent"
 )
 
 var log = clog.NewWithPlugin(pluginName)
@@ -67,6 +67,11 @@ type Admin struct {
 	httpClient *http.Client
 	stop       chan struct{}
 	tsig       *tsigHub
+
+	filters          *filterEngine
+	filterHTTP       *http.Client
+	filterAllowLocal bool
+	xferHub          *xferHub
 }
 
 func (a *Admin) Name() string { return pluginName }

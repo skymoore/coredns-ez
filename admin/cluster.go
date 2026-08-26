@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/skymoore/coredns-plugins/admin/store"
-	"github.com/skymoore/coredns-plugins/internal/zonereg"
+	"github.com/skymoore/coredns-ez/admin/store"
+	"github.com/skymoore/coredns-ez/internal/zonereg"
 )
 
 func (a *Admin) handleGetCluster(w http.ResponseWriter, r *http.Request) {
@@ -134,6 +134,7 @@ func (a *Admin) handleClusterJoin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	a.appendTransferAddr(body.DNSAddr)
 	_, _ = a.db.BumpGeneration()
 	clusterID, _ := a.db.Meta(store.MetaClusterID)
 	if clusterID == "" {
@@ -254,6 +255,8 @@ func (a *Admin) applySnapshot(snap store.Snapshot) error {
 		}
 	}
 	a.publishTSIG()
+	a.publishFilter()
+	a.publishTransfer()
 	syncCount.WithLabelValues("ok").Inc()
 	a.refreshZoneMetrics()
 	return nil

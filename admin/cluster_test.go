@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/skymoore/coredns-plugins/admin/store"
+	"github.com/skymoore/coredns-ez/admin/store"
 )
 
 func TestClusterRosterIncludesPrimary(t *testing.T) {

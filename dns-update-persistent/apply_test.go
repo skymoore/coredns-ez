@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/miekg/dns"
-	"github.com/skymoore/coredns-plugins/internal/zonereg"
+	"github.com/skymoore/coredns-ez/internal/zonereg"
 )
 
 func TestApplyAddsAndDeletes(t *testing.T) {

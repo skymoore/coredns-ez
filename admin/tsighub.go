@@ -17,7 +17,7 @@ import (
 	"github.com/coredns/coredns/core/dnsserver"
 	"github.com/coredns/coredns/plugin/transfer"
 	"github.com/miekg/dns"
-	"github.com/skymoore/coredns-plugins/admin/store"
+	"github.com/skymoore/coredns-ez/admin/store"
 )
 
 // tsigHub holds HMAC secrets for the live CoreDNS server. CoreDNS copies

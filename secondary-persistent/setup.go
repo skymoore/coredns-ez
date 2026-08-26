@@ -16,7 +16,7 @@ import (
 	"github.com/coredns/coredns/plugin/pkg/parse"
 	"github.com/coredns/coredns/plugin/pkg/upstream"
 	"github.com/coredns/coredns/plugin/transfer"
-	"github.com/skymoore/coredns-plugins/internal/zonereg"
+	"github.com/skymoore/coredns-ez/internal/zonereg"
 )
 
 var log = clog.NewWithPlugin(pluginName)

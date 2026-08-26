@@ -9,7 +9,7 @@ import (
 
 	"github.com/coredns/coredns/plugin/transfer"
 	"github.com/miekg/dns"
-	"github.com/skymoore/coredns-plugins/ixfr"
+	"github.com/skymoore/coredns-ez/ixfr"
 )
 
 const seedZone = `$ORIGIN example.org.

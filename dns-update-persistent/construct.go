@@ -7,8 +7,8 @@ import (
 	"github.com/coredns/coredns/plugin"
 	"github.com/coredns/coredns/plugin/transfer"
 	"github.com/miekg/dns"
-	"github.com/skymoore/coredns-plugins/internal/zonereg"
-	"github.com/skymoore/coredns-plugins/ixfr"
+	"github.com/skymoore/coredns-ez/internal/zonereg"
+	"github.com/skymoore/coredns-ez/ixfr"
 )
 
 // New loads origin from seedPath. Used by the API plugin to create a primary

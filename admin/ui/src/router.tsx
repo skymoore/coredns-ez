@@ -21,6 +21,7 @@ import { TokensPage } from "./routes/tokens";
 import { TsigPage } from "./routes/tsig";
 import { SettingsPage } from "./routes/settings";
 import { AclsPage } from "./routes/acls";
+import { FiltersPage } from "./routes/filters";
 import { hasRole } from "./lib/roles";
 import type { Actor, Role } from "./lib/types";
 
@@ -140,6 +141,15 @@ const aclsRoute = createRoute({
   component: AclsPage,
 });
 
+const filtersRoute = createRoute({
+  getParentRoute: () => authRoute,
+  path: "/filters",
+  component: function Filters() {
+    const { me } = authRoute.useRouteContext();
+    return <FiltersPage me={me} />;
+  },
+});
+
 const settingsRoute = createRoute({
   getParentRoute: () => authRoute,
   path: "/settings",
@@ -160,6 +170,7 @@ const routeTree = rootRoute.addChildren([
     tokensRoute,
     tsigRoute,
     aclsRoute,
+    filtersRoute,
     settingsRoute,
   ]),
 ]);

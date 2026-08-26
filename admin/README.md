@@ -70,11 +70,11 @@ admin {
 
 ```
 file:file
-dns-update-persistent:github.com/skymoore/coredns-plugins/dns-update-persistent
-ixfr:github.com/skymoore/coredns-plugins/ixfr
-admin:github.com/skymoore/coredns-plugins/admin
+dns-update-persistent:github.com/skymoore/coredns-ez/dns-update-persistent
+ixfr:github.com/skymoore/coredns-ez/ixfr
+admin:github.com/skymoore/coredns-ez/admin
 secondary:secondary
-secondary-persistent:github.com/skymoore/coredns-plugins/secondary-persistent
+secondary-persistent:github.com/skymoore/coredns-ez/secondary-persistent
 ```
 
 Apply `patches/coredns-http-handler.patch` to the CoreDNS tree before `go generate && go build`.
@@ -101,9 +101,11 @@ Authenticated JSON for the UI:
 * `GET /api/v1/metrics` curated in-process Prometheus snapshot
 * `GET /api/v1/audit` recent audit rows
 * `GET|POST /api/v1/tsig-keys`, `DELETE /api/v1/tsig-keys/{id}` HMAC keys for nsupdate / signed transfers
+* Filters: `GET /api/v1/filters`; `POST/DELETE /api/v1/filters/rules`; URL lists at `POST /api/v1/filters/feeds` with `sync` `periodic` (refresh on an interval) or `once` (import now, do not refresh). Blocked names that are not in an admin-owned zone are NXDOMAIN. Allow wins. `example.com` matches itself and subdomains; `*.example.com` matches subdomains only.
+* `GET|PUT /api/v1/transfer` extra AXFR IPs (unioned with Corefile `transfer { to }`). IPs only; `*` is rejected. Cluster join appends the secondary DNS address.
 * Cluster: on the primary, **Add a secondary** mints a one-time join key. On a new `role secondary` instance, Cluster → paste primary URL + key. Identity (users, tokens, TSIG keys, zone list) replicates; zone data is AXFRed from `advertise`.
 
-Zone transfers (AXFR/IXFR) are **not** gated by the admin login. The CoreDNS `transfer` plugin allows AXFR from every address in `transfer { to ... }`. `to *` means anyone who can reach the DNS port can copy the zone. TSIG is not required for AXFR unless the Corefile `tsig` plugin has `require AXFR`. List secondary IPs in `to` (and optionally require TSIG) before exposing the server.
+Zone transfers (AXFR/IXFR) are **not** gated by the admin login. The CoreDNS `transfer` plugin allows AXFR from every address in `transfer { to ... }` plus extra IPs from `PUT /api/v1/transfer`. `to *` means anyone who can reach the DNS port can copy the zone. Product Corefiles use `to 127.0.0.1` only. TSIG is not required for AXFR unless the Corefile `tsig` plugin has `require AXFR`.
 
 Build the UI with `make ui` (or `npm --prefix admin/ui ci && npm --prefix admin/ui run build`) before `go build`.
 

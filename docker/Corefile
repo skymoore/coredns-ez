@@ -1,0 +1,34 @@
+# Default Corefile for the Alpine image.
+#
+# http://0.0.0.0:8080  admin UI and /api/v1 (plain HTTP; CoreDNS https
+# transport without a tls plugin does not wrap the listener).
+# :53                  authoritative DNS for zones created in the UI
+# 127.0.0.1:9153       Prometheus (not published to the internet)
+#
+# Recursion is off. AXFR is localhost-only until you add IPs in the UI
+# (Cluster → Zone transfer). `to *` lets anyone copy the zone.
+#
+# Production DoH/UI: see docker/Corefile.tls and docs/deploy.md.
+# Override this file with -v ./Corefile:/etc/coredns/Corefile
+
+https://.:8080 {
+	prometheus 127.0.0.1:9153
+	errors
+	log
+	admin {
+		db /var/lib/coredns/admin.sqlite
+		data /var/lib/coredns/zones
+		role primary
+		bootstrap_admin admin
+	}
+}
+
+. {
+	prometheus 127.0.0.1:9153
+	errors
+	log
+	admin
+	transfer {
+		to 127.0.0.1
+	}
+}

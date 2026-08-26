@@ -6,8 +6,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/miekg/dns"
-	"github.com/skymoore/coredns-plugins/admin/store"
-	"github.com/skymoore/coredns-plugins/internal/zonereg"
+	"github.com/skymoore/coredns-ez/admin/store"
+	"github.com/skymoore/coredns-ez/internal/zonereg"
 )
 
 type zoneJSON struct {

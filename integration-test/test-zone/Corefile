@@ -17,7 +17,7 @@ https://.:8443 {
 		advertise 172.30.53.10:53
 	}
 	transfer {
-		to * 172.30.53.20
+		to 172.30.53.20 172.30.53.30
 	}
 }
 
@@ -25,7 +25,7 @@ https://.:8443 {
 	prometheus :9153
 	admin
 	transfer {
-		to * 172.30.53.20
+		to 172.30.53.20 172.30.53.30
 	}
 }
 
@@ -53,9 +53,8 @@ example.com {
 
 	ixfr
 
-	# "*" lets the tester AXFR. The secondary IP is listed so NOTIFY is
-	# actually sent (`to *` is skipped by the transfer plugin's Notify).
+	# Tester AXFR (172.30.53.30). Secondary IP is listed so NOTIFY is sent.
 	transfer {
-		to * 172.30.53.20
+		to 172.30.53.20 172.30.53.30
 	}
 }

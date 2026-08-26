@@ -1,4 +1,4 @@
-name: coredns-plugins-it
+name: coredns-ez-it
 
 # Fixed addresses: CoreDNS transfer { from|to } accepts only IPs (not DNS
 # names). Notify matching also compares the source IP to transfer-from.

@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/skymoore/coredns-plugins/admin/store"
-	dnsupdatepersist "github.com/skymoore/coredns-plugins/dns-update-persistent"
-	"github.com/skymoore/coredns-plugins/internal/zonereg"
+	"github.com/skymoore/coredns-ez/admin/store"
+	dnsupdatepersist "github.com/skymoore/coredns-ez/dns-update-persistent"
+	"github.com/skymoore/coredns-ez/internal/zonereg"
 )
 
 func testAdmin(t *testing.T) *Admin {
@@ -30,12 +30,15 @@ func testAdmin(t *testing.T) *Admin {
 		t.Fatal(err)
 	}
 	a := &Admin{
-		cfg:       coreConfig{Role: rolePrimary, Data: dir, DB: filepath.Join(dir, "api.sqlite"), Password: true},
-		db:        st,
-		primaries: map[string]*dnsupdatepersist.UpdatePersist{},
-		views:     map[string]map[string]*dnsupdatepersist.UpdatePersist{},
-		stop:      make(chan struct{}),
-		tsig:      newTSIGHub(),
+		cfg:              coreConfig{Role: rolePrimary, Data: dir, DB: filepath.Join(dir, "api.sqlite"), Password: true},
+		db:               st,
+		primaries:        map[string]*dnsupdatepersist.UpdatePersist{},
+		views:            map[string]map[string]*dnsupdatepersist.UpdatePersist{},
+		stop:             make(chan struct{}),
+		tsig:             newTSIGHub(),
+		filters:          newFilterEngine(),
+		filterAllowLocal: true,
+		xferHub:          newXferHub(),
 	}
 	a.mux = a.routes()
 	t.Cleanup(func() { close(a.stop) })

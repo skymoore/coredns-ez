@@ -61,8 +61,8 @@ Add these lines to CoreDNS `plugin.cfg` immediately after `file`:
 
 ```
 file:file
-dns-update-persistent:github.com/skymoore/coredns-plugins/dns-update-persistent
-ixfr:github.com/skymoore/coredns-plugins/ixfr
+dns-update-persistent:github.com/skymoore/coredns-ez/dns-update-persistent
+ixfr:github.com/skymoore/coredns-ez/ixfr
 ```
 
 Then rebuild (`go generate && go build`). Do not configure *file*, *dynupdate*, *secondary*, or *secondary-persistent* for the same origin.

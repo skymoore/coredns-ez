@@ -11,9 +11,9 @@ import (
 	"github.com/coredns/coredns/plugin"
 	"github.com/coredns/coredns/request"
 	"github.com/miekg/dns"
-	"github.com/skymoore/coredns-plugins/admin/store"
-	dnsupdatepersist "github.com/skymoore/coredns-plugins/dns-update-persistent"
-	"github.com/skymoore/coredns-plugins/internal/zonereg"
+	"github.com/skymoore/coredns-ez/admin/store"
+	dnsupdatepersist "github.com/skymoore/coredns-ez/dns-update-persistent"
+	"github.com/skymoore/coredns-ez/internal/zonereg"
 )
 
 func persistNameView(origin, acl string) string {
@@ -220,6 +220,9 @@ func (a *Admin) serveWithNext(ctx context.Context, w dns.ResponseWriter, r *dns.
 		if plugin.Zones(sec.Names).Matches(name) != "" {
 			return sec.ServeDNS(ctx, w, r)
 		}
+	}
+	if a.filters != nil && a.filters.blocked(name) {
+		return writeFilterBlock(w, r)
 	}
 	return plugin.NextOrFailure(a.Name(), next, ctx, w, r)
 }

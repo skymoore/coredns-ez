@@ -1,0 +1,77 @@
+name: coredns-cluster
+
+# transfer { to } is IP-only, so this stack pins addresses.
+#
+#   docker compose -f docker-compose.cluster.yml up --build
+#   # primary UI http://127.0.0.1:8080  mint a join key
+#   COREDNS_JOIN_TOKEN=... docker compose -f docker-compose.cluster.yml up -d secondary
+
+networks:
+  dnsnet:
+    ipam:
+      config:
+        - subnet: 172.30.80.0/24
+
+volumes:
+  primary-data:
+  secondary-data:
+
+x-coredns: &coredns
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: ghcr.io/skymoore/coredns-ez:local
+  restart: unless-stopped
+  networks:
+    dnsnet: {}
+
+services:
+  primary:
+    <<: *coredns
+    hostname: primary
+    networks:
+      dnsnet:
+        ipv4_address: 172.30.80.10
+    environment:
+      COREDNS_ADMIN_BOOTSTRAP_PASSWORD: ${COREDNS_ADMIN_BOOTSTRAP_PASSWORD:-changeme}
+    volumes:
+      - ./docker/cluster/Corefile.primary:/etc/coredns/Corefile:ro
+      - primary-data:/var/lib/coredns
+    ports:
+      - "53:53/udp"
+      - "53:53/tcp"
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/api/v1/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 8s
+
+  secondary:
+    <<: *coredns
+    hostname: secondary
+    profiles: ["cluster"]
+    networks:
+      dnsnet:
+        ipv4_address: 172.30.80.20
+    environment:
+      COREDNS_JOIN_URL: http://172.30.80.10:8080
+      COREDNS_JOIN_TOKEN: ${COREDNS_JOIN_TOKEN:-}
+      COREDNS_ADVERTISE_DNS: 172.30.80.20:53
+    volumes:
+      - ./docker/cluster/Corefile.secondary:/etc/coredns/Corefile:ro
+      - secondary-data:/var/lib/coredns
+    ports:
+      - "8081:8080"
+      - "5354:53/udp"
+      - "5354:53/tcp"
+    depends_on:
+      primary:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/api/v1/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 8s

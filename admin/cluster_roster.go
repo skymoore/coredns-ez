@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/skymoore/coredns-plugins/admin/store"
+	"github.com/skymoore/coredns-ez/admin/store"
 )
 
 type clusterMemberJSON struct {

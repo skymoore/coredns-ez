@@ -105,6 +105,28 @@ CREATE TABLE IF NOT EXISTS tsig_keys (
   secret TEXT NOT NULL,
   created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS filter_feeds (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  action TEXT NOT NULL,
+  url TEXT NOT NULL,
+  sync TEXT NOT NULL,
+  interval_seconds INTEGER NOT NULL DEFAULT 86400,
+  last_sync_at INTEGER,
+  last_error TEXT NOT NULL DEFAULT '',
+  last_count INTEGER NOT NULL DEFAULT 0,
+  etag TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS filter_rules (
+  id TEXT PRIMARY KEY,
+  action TEXT NOT NULL,
+  pattern TEXT NOT NULL,
+  kids_only INTEGER NOT NULL DEFAULT 0,
+  source TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  UNIQUE(action, pattern, kids_only, source)
+);
 `
 
 const (
@@ -121,6 +143,7 @@ const (
 	MetaMemberSec  = "member_secret"
 	MetaMemberID   = "member_id"
 	MetaGeneration = "snapshot_generation"
+	MetaTransferTo = "transfer_to"
 
 	MemberPrimary   = "primary"
 	MemberSecondary = "secondary"

@@ -1,0 +1,22 @@
+https://.:8080 {
+	prometheus 127.0.0.1:9153
+	errors
+	log
+	admin {
+		db /var/lib/coredns/admin.sqlite
+		data /var/lib/coredns/zones
+		role primary
+		bootstrap_admin admin
+		advertise 172.30.80.10:53
+	}
+}
+
+. {
+	prometheus 127.0.0.1:9153
+	errors
+	log
+	admin
+	transfer {
+		to 127.0.0.1 172.30.80.20
+	}
+}

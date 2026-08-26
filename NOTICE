@@ -1,0 +1,18 @@
+coredns-ez
+Copyright 2026 the coredns-ez authors
+
+This product includes software developed by the CoreDNS project
+(https://coredns.io / https://github.com/coredns/coredns), licensed under
+the Apache License, Version 2.0.
+
+This repository is an independent CoreDNS *build* with extra plugins and an
+embedded operator UI. It is not a CNCF project, not an official CoreDNS
+release, and is not affiliated with, endorsed by, or a product of the CNCF
+or the CoreDNS project.
+
+The CoreDNS name and logos are trademarks of their owners. They appear in
+the operator console because this binary is CoreDNS. That does not make this
+an official CoreDNS product.
+
+Lato is licensed under the SIL Open Font License, Version 1.1.
+See admin/ui/src/assets/brand for font files.

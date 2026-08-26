@@ -44,8 +44,8 @@ ixfr [ZONE] {
 
 ```
 file:file
-dns-update-persistent:github.com/skymoore/coredns-plugins/dns-update-persistent
-ixfr:github.com/skymoore/coredns-plugins/ixfr
+dns-update-persistent:github.com/skymoore/coredns-ez/dns-update-persistent
+ixfr:github.com/skymoore/coredns-ez/ixfr
 ```
 
 ## Examples

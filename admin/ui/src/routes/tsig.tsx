@@ -145,7 +145,7 @@ export function TsigPage() {
       {rows.length === 0 ? (
         <EmptyState
           title="No TSIG keys"
-          body="Create a key for RFC 2136 updates. Signed AXFR still needs transfer { to ... } to name the secondaries."
+          body="Create a key for RFC 2136 updates. AXFR still needs the secondary IP on Cluster → Zone transfer (never to *)."
         />
       ) : (
         <div className="rounded-lg border border-border">

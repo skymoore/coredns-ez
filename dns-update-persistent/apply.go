@@ -5,7 +5,7 @@ import (
 
 	"github.com/coredns/coredns/plugin/transfer"
 	"github.com/miekg/dns"
-	"github.com/skymoore/coredns-plugins/internal/zonereg"
+	"github.com/skymoore/coredns-ez/internal/zonereg"
 )
 
 // RcodeError is an RFC 2136 rcode produced by Apply.

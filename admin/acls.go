@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/skymoore/coredns-plugins/admin/store"
-	dnsupdatepersist "github.com/skymoore/coredns-plugins/dns-update-persistent"
+	"github.com/skymoore/coredns-ez/admin/store"
+	dnsupdatepersist "github.com/skymoore/coredns-ez/dns-update-persistent"
 )
 
 func (a *Admin) handleListACLs(w http.ResponseWriter, _ *http.Request) {

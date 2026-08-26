@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/miekg/dns"
-	"github.com/skymoore/coredns-plugins/admin/store"
+	"github.com/skymoore/coredns-ez/admin/store"
 )
 
 func TestTSIGKeyCRUD(t *testing.T) {

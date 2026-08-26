@@ -44,14 +44,17 @@ type OIDCConfig struct {
 }
 
 type Snapshot struct {
-	Generation int64       `json:"generation"`
-	Users      []User      `json:"users"`
-	Tokens     []Token     `json:"tokens"`
-	OIDC       *OIDCConfig `json:"oidc,omitempty"`
-	Zones      []ZoneRow   `json:"zones"`
-	Members    []Member    `json:"members"`
-	ACLs       []ACL       `json:"acls"`
-	TSIGKeys   []TSIGKey   `json:"tsig_keys,omitempty"`
+	Generation  int64        `json:"generation"`
+	Users       []User       `json:"users"`
+	Tokens      []Token      `json:"tokens"`
+	OIDC        *OIDCConfig  `json:"oidc,omitempty"`
+	Zones       []ZoneRow    `json:"zones"`
+	Members     []Member     `json:"members"`
+	ACLs        []ACL        `json:"acls"`
+	TSIGKeys    []TSIGKey    `json:"tsig_keys,omitempty"`
+	FilterFeeds []FilterFeed `json:"filter_feeds,omitempty"`
+	FilterRules []FilterRule `json:"filter_rules,omitempty"`
+	TransferTo  []string     `json:"transfer_to"`
 }
 
 func (s *Store) InsertJoinToken(hash string, ttl time.Duration) (JoinToken, error) {
@@ -307,7 +310,16 @@ func (s *Store) Snapshot() (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
-	snap := Snapshot{Generation: s.Generation(), Users: users, Tokens: tokens, Zones: zones, Members: members, ACLs: acls, TSIGKeys: keys}
+	feeds, err := s.ListFilterFeeds()
+	if err != nil {
+		return Snapshot{}, err
+	}
+	rules, err := s.ListFilterRules("", "")
+	if err != nil {
+		return Snapshot{}, err
+	}
+	to := s.TransferTo()
+	snap := Snapshot{Generation: s.Generation(), Users: users, Tokens: tokens, Zones: zones, Members: members, ACLs: acls, TSIGKeys: keys, FilterFeeds: feeds, FilterRules: rules, TransferTo: to}
 	if oidc, err := s.GetOIDC(); err == nil {
 		snap.OIDC = &oidc
 	}
@@ -383,6 +395,14 @@ func (s *Store) ApplySnapshot(snap Snapshot) error {
 	}
 	if err := applyTSIGKeysTx(tx, snap.TSIGKeys); err != nil {
 		return err
+	}
+	if err := applyFiltersTx(tx, snap.FilterFeeds, snap.FilterRules); err != nil {
+		return err
+	}
+	if snap.TransferTo != nil {
+		if _, err := tx.Exec(`INSERT INTO meta(k, v) VALUES(?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v`, MetaTransferTo, JoinCSV(snap.TransferTo)); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.Exec(`INSERT INTO meta(k, v) VALUES(?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v`, MetaGeneration, snap.Generation); err != nil {
 		return err

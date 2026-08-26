@@ -29,6 +29,6 @@ example.com {
 	}
 
 	transfer {
-		to *
+		to 172.30.53.30
 	}
 }

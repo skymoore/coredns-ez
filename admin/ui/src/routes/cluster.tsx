@@ -16,6 +16,7 @@ import { Select } from "@/components/ui/select";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { formatTime } from "@/lib/format";
 import { ConfirmDialog } from "@/components/shell/confirm-dialog";
+import { TransferCard } from "@/components/cluster/transfer-card";
 
 const ttls = [
   { value: "1h", label: "1 hour" },
@@ -131,8 +132,8 @@ export function ClusterPage() {
                 }}
               >
                 <p className="text-sm text-muted-foreground">
-                  This mints a one-time join key. It does not open AXFR to the world. The secondary still has to be
-                  allowed by <span className="font-mono">transfer {'{'} to ... {'}'}</span> on this primary.
+                  This mints a one-time join key. It does not open AXFR to the world. Join appends the secondary
+                  DNS IP to the node-wide transfer list below.
                 </p>
                 <div className="space-y-2">
                   <Label>Key lifetime</Label>
@@ -275,6 +276,8 @@ export function ClusterPage() {
           )}
         </div>
       ) : null}
+
+      {role === "primary" ? <TransferCard canEdit /> : null}
 
       <ConfirmDialog
         open={!!del}

@@ -55,9 +55,10 @@ nsupdate -y hmac-sha256:updater.example.com.:Y29yZWRucy1pbnRlZ3JhdGlvbi10ZXN0LWt
 | `scripts/run-tests.sh` | in-container assertions |
 
 `transfer from` / `transfer to` take IP addresses only, which is why the
-compose network pins `172.30.53.10` and `172.30.53.20`. `to *` is also set so
-the tester can AXFR; the secondary IP is listed separately because Notify
-skips `*`.
+compose network pins `172.30.53.10` and `172.30.53.20`. AXFR is allowed from
+the tester (`172.30.53.30`) and the secondary (`172.30.53.20`, primary only,
+so NOTIFY is sent). Host-side `dig AXFR` against the published ports is
+REFUSED unless you add your host IP.
 
 The primary includes the `ixfr` plugin, so a stale-serial IXFR is a real RFC 1995
 delta (inner SOA + added/deleted RRs), not a full-zone dump. One atomic UPDATE

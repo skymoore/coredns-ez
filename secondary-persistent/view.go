@@ -2,7 +2,7 @@ package secondarypersist
 
 import (
 	"github.com/miekg/dns"
-	"github.com/skymoore/coredns-plugins/internal/zonereg"
+	"github.com/skymoore/coredns-ez/internal/zonereg"
 )
 
 // originView exposes one origin of a SecondaryPersist as zonereg.Secondary.

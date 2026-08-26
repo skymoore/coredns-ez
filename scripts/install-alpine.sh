@@ -1,17 +1,17 @@
 #!/bin/sh
-# Install a skymoore/coredns-plugins release on Alpine Linux (OpenRC).
+# Install a skymoore/coredns-ez release on Alpine Linux (OpenRC).
 #
 # Latest release:
-#   curl -fsSL https://raw.githubusercontent.com/skymoore/coredns-plugins/main/scripts/install-alpine.sh | sudo sh
+#   curl -fsSL https://raw.githubusercontent.com/skymoore/coredns-ez/main/scripts/install-alpine.sh | sudo sh
 # Pin a version and start:
-#   curl -fsSL https://raw.githubusercontent.com/skymoore/coredns-plugins/main/scripts/install-alpine.sh | sudo START=1 VERSION=v1.14.7 sh
+#   curl -fsSL https://raw.githubusercontent.com/skymoore/coredns-ez/main/scripts/install-alpine.sh | sudo START=1 VERSION=v1.14.7 sh
 #
 # Does not overwrite an existing Corefile, unbound.conf (once seeded), or
 # /etc/conf.d/coredns. Re-run after every binary upgrade so
 # cap_net_bind_service is restored.
 set -eu
 
-REPO="${REPO:-skymoore/coredns-plugins}"
+REPO="${REPO:-skymoore/coredns-ez}"
 PREFIX="${PREFIX:-/usr/local}"
 CONF_DIR="${CONF_DIR:-/etc/coredns}"
 LIB_DIR="${LIB_DIR:-/var/lib/coredns}"
@@ -113,7 +113,7 @@ install_binary() {
 # directly; CoreDNS forwards "." here for recursion on :53.
 write_unbound() {
 	conf=/etc/unbound/unbound.conf
-	if [ -f "$conf" ] && grep -q 'coredns-plugins' "$conf"; then
+	if [ -f "$conf" ] && grep -qE 'coredns-ez|coredns-plugins' "$conf"; then
 		printf 'keep existing %s\n' "$conf"
 		return
 	fi
@@ -134,7 +134,7 @@ write_unbound() {
 	fi
 
 	cat >"$conf" <<EOF
-# Seeded by coredns-plugins install-alpine.sh.
+# Seeded by coredns-ez install-alpine.sh.
 # Validating recursive resolver. Not an open resolver: only private,
 # loopback, link-local, and CGNAT clients are allowed.
 # Port ${UNBOUND_PORT} so CoreDNS can bind :53 and forward "." here.
@@ -203,7 +203,8 @@ write_corefile() {
 		return
 	fi
 	cat >"$corefile" <<EOF
-. {
+# Admin UI on :8080 (plain HTTP). Add tls + https://.:443 for production DoH.
+https://.:8080 {
 	errors
 	log
 	admin {
@@ -212,11 +213,32 @@ write_corefile() {
 		role primary
 		bootstrap_admin admin
 	}
-	forward . 127.0.0.1:${UNBOUND_PORT}
-	cache
 }
 
-# Add an https://.:443 block (and tls) to serve the admin UI on DoH.
+# Private clients: authoritative + recursion via Unbound.
+. {
+	view lan {
+		expr incidr(client_ip(), '10.0.0.0/8') || incidr(client_ip(), '172.16.0.0/12') || incidr(client_ip(), '192.168.0.0/16') || incidr(client_ip(), '127.0.0.0/8') || incidr(client_ip(), '100.64.0.0/10') || incidr(client_ip(), '169.254.0.0/16') || incidr(client_ip(), '::1/128') || incidr(client_ip(), 'fc00::/7') || incidr(client_ip(), 'fe80::/10')
+	}
+	errors
+	log
+	admin
+	forward . 127.0.0.1:${UNBOUND_PORT}
+	cache
+	transfer {
+		to 127.0.0.1
+	}
+}
+
+# Everyone else: zones from the UI only. Not an open resolver.
+. {
+	errors
+	log
+	admin
+	transfer {
+		to 127.0.0.1
+	}
+}
 EOF
 	chown "$USER_NAME:$USER_NAME" "$corefile"
 	chmod 640 "$corefile"
@@ -287,6 +309,7 @@ write_openrc
 enable_service
 printf 'installed %s to %s/bin/coredns\n' "$VERSION" "$PREFIX"
 printf 'Corefile: %s/Corefile  unbound: /etc/unbound/unbound.conf\n' "$CONF_DIR"
-printf 'unbound recursion: UDP/TCP :%s from private IPs (RFC1918, ULA, loopback, CGNAT)\n' "$UNBOUND_PORT"
-printf 'Set COREDNS_ADMIN_BOOTSTRAP_PASSWORD in /etc/conf.d/coredns before the first start.\n'
+printf 'unbound recursion: UDP/TCP :%s from private IPs; CoreDNS :53 recurses only for those clients (view lan)\n' "$UNBOUND_PORT"
+printf 'Admin UI: http://<host>:8080  (user admin). Set COREDNS_ADMIN_BOOTSTRAP_PASSWORD in /etc/conf.d/coredns before the first start.\n'
+printf 'AXFR is localhost-only until you add secondary IPs in the UI.\n'
 printf 'To start now: curl -fsSL %s | START=1 sh\n' "$INSTALLER"

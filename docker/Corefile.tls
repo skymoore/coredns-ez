@@ -1,0 +1,27 @@
+# Example: DoH + admin UI on 443 with a certificate you already have.
+# Copy certs to /etc/coredns/tls and use:
+#   docker run ... -v ./Corefile.tls:/etc/coredns/Corefile \
+#     -v ./certs:/etc/coredns/tls:ro -p 53:53/udp -p 53:53/tcp -p 443:443
+
+https://.:443 {
+	tls /etc/coredns/tls/cert.pem /etc/coredns/tls/key.pem
+	prometheus 127.0.0.1:9153
+	errors
+	log
+	admin {
+		db /var/lib/coredns/admin.sqlite
+		data /var/lib/coredns/zones
+		role primary
+		bootstrap_admin admin
+	}
+}
+
+. {
+	prometheus 127.0.0.1:9153
+	errors
+	log
+	admin
+	transfer {
+		to 127.0.0.1
+	}
+}

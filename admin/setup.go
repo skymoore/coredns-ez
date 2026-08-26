@@ -16,8 +16,8 @@ import (
 	"github.com/coredns/coredns/plugin/pkg/parse"
 	"github.com/coredns/coredns/plugin/transfer"
 	"github.com/miekg/dns"
-	"github.com/skymoore/coredns-plugins/admin/store"
-	dnsupdatepersist "github.com/skymoore/coredns-plugins/dns-update-persistent"
+	"github.com/skymoore/coredns-ez/admin/store"
+	dnsupdatepersist "github.com/skymoore/coredns-ez/dns-update-persistent"
 )
 
 func init() { plugin.Register(pluginName, setup) }
@@ -43,6 +43,7 @@ func setup(c *caddy.Controller) error {
 			}
 		}
 		attach(c, instance)
+		registerTransferStartup(c, instance)
 		return nil
 	}
 	if empty {
@@ -56,21 +57,8 @@ func setup(c *caddy.Controller) error {
 	instance = a
 	attach(c, a)
 
+	registerTransferStartup(c, a)
 	c.OnStartup(func() error {
-		if t := dnsserver.GetConfig(c).Handler("transfer"); t != nil {
-			if x, ok := t.(*transfer.Transfer); ok {
-				a.xfer = x
-				a.tsig.SetTransfer(x)
-				a.mu.Lock()
-				for _, p := range a.primaries {
-					p.SetTransfer(x)
-				}
-				if a.secondaries != nil {
-					a.secondaries.SetTransfer(x)
-				}
-				a.mu.Unlock()
-			}
-		}
 		return a.loadPersistedZones()
 	})
 	c.OnShutdown(func() error {
@@ -82,6 +70,38 @@ func setup(c *caddy.Controller) error {
 		return a.close()
 	})
 	return nil
+}
+
+func registerTransferStartup(c *caddy.Controller, a *Admin) {
+	c.OnStartup(func() error {
+		t := dnsserver.GetConfig(c).Handler("transfer")
+		if t == nil {
+			return nil
+		}
+		x, ok := t.(*transfer.Transfer)
+		if !ok {
+			return nil
+		}
+		a.bindTransfer(x)
+		return nil
+	})
+}
+
+func (a *Admin) bindTransfer(x *transfer.Transfer) {
+	a.xfer = x
+	a.tsig.SetTransfer(x)
+	if a.xferHub != nil {
+		a.xferHub.AddTransfer(x)
+		a.publishTransfer()
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, p := range a.primaries {
+		p.SetTransfer(x)
+	}
+	if a.secondaries != nil {
+		a.secondaries.SetTransfer(x)
+	}
 }
 
 // adminChain keeps a per-server-block Next so the process-wide singleton can
@@ -190,8 +210,12 @@ func newAdmin(cfg coreConfig) (*Admin, error) {
 		httpClient: &http.Client{Timeout: 15 * time.Second},
 		stop:       make(chan struct{}),
 		tsig:       newTSIGHub(),
+		filters:    newFilterEngine(),
+		xferHub:    newXferHub(),
 	}
 	a.publishTSIG()
+	a.publishFilter()
+	a.publishTransfer()
 
 	if cfg.OIDC != nil {
 		rt, err := newOIDC(context.Background(), *cfg.OIDC)
@@ -215,6 +239,7 @@ func newAdmin(cfg coreConfig) (*Admin, error) {
 		if err := a.ensureSelfMember(""); err != nil {
 			log.Warningf("cluster self member: %v", err)
 		}
+		go a.filterLoop()
 	}
 
 	if cfg.Role == roleSecondary {

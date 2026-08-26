@@ -1,0 +1,19 @@
+https://.:8080 {
+	prometheus 127.0.0.1:9153
+	errors
+	log
+	admin {
+		db /var/lib/coredns/admin.sqlite
+		data /var/lib/coredns/zones
+		role secondary
+		dns 172.30.80.10:53
+		advertise 172.30.80.20:53
+	}
+}
+
+. {
+	prometheus 127.0.0.1:9153
+	errors
+	log
+	admin
+}

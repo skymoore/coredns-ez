@@ -7,7 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/skymoore/coredns-plugins/admin/store"
+	"github.com/skymoore/coredns-ez/admin/store"
 )
 
 func (a *Admin) routes() http.Handler {
@@ -66,6 +66,17 @@ func (a *Admin) routes() http.Handler {
 			r.Post("/acls", requireRole(store.RoleOperator, a.handleCreateACL))
 			r.Patch("/acls/{name}", requireRole(store.RoleOperator, a.handlePatchACL))
 			r.Delete("/acls/{name}", requireRole(store.RoleOperator, a.handleDeleteACL))
+
+			r.Get("/transfer", requireRole(store.RoleViewer, a.handleGetTransfer))
+			r.Put("/transfer", requireRole(store.RoleOperator, a.handlePutTransfer))
+
+			r.Get("/filters", requireRole(store.RoleViewer, a.handleGetFilters))
+			r.Post("/filters/rules", requireRole(store.RoleOperator, a.handleCreateFilterRule))
+			r.Delete("/filters/rules/{id}", requireRole(store.RoleOperator, a.handleDeleteFilterRule))
+			r.Post("/filters/feeds", requireRole(store.RoleOperator, a.handleCreateFilterFeed))
+			r.Patch("/filters/feeds/{id}", requireRole(store.RoleOperator, a.handlePatchFilterFeed))
+			r.Post("/filters/feeds/{id}/sync", requireRole(store.RoleOperator, a.handleSyncFilterFeed))
+			r.Delete("/filters/feeds/{id}", requireRole(store.RoleOperator, a.handleDeleteFilterFeed))
 
 			r.Get("/zones/{origin}/records", requireRole(store.RoleViewer, a.handleListRecords))
 			r.Post("/zones/{origin}/records", requireRole(store.RoleOperator, a.handleAddRecord))

@@ -26,6 +26,13 @@ const openAPIJSON = `{
     "/api/v1/cluster/snapshot": {"get": {"summary": "Auth replica snapshot"}},
     "/api/v1/tsig-keys": {"get": {"summary": "List TSIG keys"}, "post": {"summary": "Create a TSIG key"}},
     "/api/v1/tsig-keys/{id}": {"delete": {"summary": "Delete a TSIG key"}},
+    "/api/v1/transfer": {"get": {"summary": "AXFR allow-list"}, "put": {"summary": "Replace extra AXFR IPs (unioned with Corefile to)"}},
+    "/api/v1/filters": {"get": {"summary": "Block and allow lists plus URL feeds"}},
+    "/api/v1/filters/rules": {"post": {"summary": "Add a manual domain pattern"}},
+    "/api/v1/filters/rules/{id}": {"delete": {"summary": "Delete a manual domain pattern"}},
+    "/api/v1/filters/feeds": {"post": {"summary": "Add a URL list (periodic sync or one-time import)"}},
+    "/api/v1/filters/feeds/{id}": {"patch": {"summary": "Update a URL list"}, "delete": {"summary": "Remove a URL list and its entries"}},
+    "/api/v1/filters/feeds/{id}/sync": {"post": {"summary": "Fetch a URL list now"}},
     "/api/v1/metrics": {"get": {"summary": "Curated in-process Prometheus snapshot"}},
     "/api/v1/audit": {"get": {"summary": "Recent audit rows"}}
   }
