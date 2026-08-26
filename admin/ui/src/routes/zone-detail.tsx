@@ -11,7 +11,6 @@ import { RecordTable } from "@/components/records/record-table";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ConfirmDialog } from "@/components/shell/confirm-dialog";
-import { TransferCard } from "@/components/cluster/transfer-card";
 import { useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 
@@ -85,7 +84,6 @@ export function ZoneDetailPage({ me }: { me: Actor }) {
       ) : (
         <Skeleton className="h-40" />
       )}
-      <TransferCard canEdit={canWrite} />
       <ConfirmDialog
         open={del}
         onOpenChange={setDel}

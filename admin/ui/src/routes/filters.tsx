@@ -37,7 +37,14 @@ function intervalLabel(sec: number): string {
 export function FiltersPage({ me }: { me: Actor }) {
   const qc = useQueryClient();
   const canEdit = hasRole(me.role, "operator");
-  const q = useQuery({ queryKey: ["filters"], queryFn: () => api<FilterState>("/filters") });
+  const q = useQuery({
+    queryKey: ["filters"],
+    queryFn: () => api<FilterState>("/filters"),
+    refetchInterval: (query) => {
+      const feeds = query.state.data?.feeds ?? [];
+      return feeds.some((f) => !f.last_sync_at && !f.last_error) ? 2000 : false;
+    },
+  });
   const [tab, setTab] = useState<FilterAction>("block");
   const [pattern, setPattern] = useState("");
   const [qtext, setQtext] = useState("");
@@ -91,19 +98,27 @@ export function FiltersPage({ me }: { me: Actor }) {
         }),
       }),
     onSuccess: () => {
-      toast.success(listSync === "once" ? "List imported" : "List added");
+      toast.success(listSync === "once" ? "Import started" : "List added; fetching names");
       setListOpen(false);
       setListName("");
       setListURL("");
       setListSync("periodic");
       invalidate();
     },
-    onError: (e) => toast.error(e instanceof ApiError ? e.message : "failed"),
+    onError: (e) => {
+      if (e instanceof ApiError && e.status === 409) {
+        toast.message("That list URL is already on this side");
+        setListOpen(false);
+        invalidate();
+        return;
+      }
+      toast.error(e instanceof ApiError ? e.message : "failed");
+    },
   });
   const syncFeed = useMutation({
     mutationFn: (id: string) => api(`/filters/feeds/${id}/sync`, { method: "POST" }),
     onSuccess: () => {
-      toast.success("List refreshed");
+      toast.success("Refresh started");
       invalidate();
     },
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "failed"),
@@ -254,8 +269,10 @@ export function FiltersPage({ me }: { me: Actor }) {
                     <Badge tone="muted">imported</Badge>
                   )}
                 </TD>
-                <TD className="text-right tabular-nums">{formatNumber(f.last_count, 0)}</TD>
-                <TD className="text-muted-foreground">{f.last_sync_at ? formatTime(f.last_sync_at) : "never"}</TD>
+                <TD className="text-right tabular-nums">
+                  {f.last_count ? formatNumber(f.last_count, 0) : f.last_error ? "—" : "fetching"}
+                </TD>
+                <TD className="text-muted-foreground">{f.last_sync_at ? formatTime(f.last_sync_at) : "pending"}</TD>
                 {canEdit ? (
                   <TD>
                     <div className="flex justify-end gap-1">

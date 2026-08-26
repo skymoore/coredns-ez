@@ -71,6 +71,8 @@ type Admin struct {
 	filters          *filterEngine
 	filterHTTP       *http.Client
 	filterAllowLocal bool
+	filterSyncMu     sync.Mutex
+	filterSyncing    map[string]struct{}
 	xferHub          *xferHub
 }
 

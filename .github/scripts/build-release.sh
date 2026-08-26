@@ -28,32 +28,35 @@ github_output() {
   printf '%s\n' "$1" >>"$GITHUB_OUTPUT"
 }
 
+# Insert LINE immediately after the first line matching PATTERN. Portable
+# (GNU sed `a` is not BSD sed).
+insert_after() {
+  local file="$1" pattern="$2" line="$3"
+  awk -v pat="$pattern" -v ins="$line" '
+    { print }
+    $0 ~ pat && !done { print ins; done=1 }
+  ' "$file" >"${file}.tmp"
+  mv "${file}.tmp" "$file"
+}
+
 insert_plugins() {
   local cfg="$1"
   grep -q '^file:file$' "$cfg" || die "plugin.cfg is missing file:file"
   grep -q '^secondary:secondary$' "$cfg" || die "plugin.cfg is missing secondary:secondary"
   if ! grep -q "^dns-update-persistent:${PLUGIN_MODULE}/dns-update-persistent\$" "$cfg"; then
-    sed -i \
-      -e "/^file:file\$/a dns-update-persistent:${PLUGIN_MODULE}/dns-update-persistent" \
-      "$cfg"
-    sed -i \
-      -e "/^dns-update-persistent:/a ixfr:${PLUGIN_MODULE}/ixfr" \
-      "$cfg"
-    sed -i \
-      -e "/^ixfr:/a admin:${PLUGIN_MODULE}/admin" \
-      "$cfg"
+    insert_after "$cfg" '^file:file$' "dns-update-persistent:${PLUGIN_MODULE}/dns-update-persistent"
+    insert_after "$cfg" '^dns-update-persistent:' "ixfr:${PLUGIN_MODULE}/ixfr"
+    insert_after "$cfg" '^ixfr:' "admin:${PLUGIN_MODULE}/admin"
   fi
   if ! grep -q "^admin:${PLUGIN_MODULE}/admin\$" "$cfg"; then
     if grep -q '^ixfr:' "$cfg"; then
-      sed -i -e "/^ixfr:/a admin:${PLUGIN_MODULE}/admin" "$cfg"
+      insert_after "$cfg" '^ixfr:' "admin:${PLUGIN_MODULE}/admin"
     else
-      sed -i -e "/^file:file\$/a admin:${PLUGIN_MODULE}/admin" "$cfg"
+      insert_after "$cfg" '^file:file$' "admin:${PLUGIN_MODULE}/admin"
     fi
   fi
   if ! grep -q "^secondary-persistent:${PLUGIN_MODULE}/secondary-persistent\$" "$cfg"; then
-    sed -i \
-      -e "/^secondary:secondary\$/a secondary-persistent:${PLUGIN_MODULE}/secondary-persistent" \
-      "$cfg"
+    insert_after "$cfg" '^secondary:secondary$' "secondary-persistent:${PLUGIN_MODULE}/secondary-persistent"
   fi
 }
 

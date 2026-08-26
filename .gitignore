@@ -1,3 +1,4 @@
 /secondary-persistent/secondary-persistent.test
 *.test
 .grok
+dist

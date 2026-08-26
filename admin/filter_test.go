@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/miekg/dns"
 	"github.com/skymoore/coredns-ez/admin/store"
@@ -182,11 +183,28 @@ func TestFilterHTTP(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &feed); err != nil {
 		t.Fatal(err)
 	}
-	if feed.Sync != store.FilterSyncOff || feed.LastCount < 2 {
+	if feed.Sync != store.FilterSyncOff {
 		t.Fatalf("feed %+v", feed)
 	}
-	if !a.filters.blocked("evil.list.test.") || !a.filters.blocked("ads.list.test.") {
-		t.Fatal("feed rules not compiled")
+	dup := httptest.NewRequest(http.MethodPost, "/api/v1/filters/feeds", bytes.NewReader(feedBody))
+	dup.Header.Set("Authorization", "Bearer "+tok)
+	dup.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	a.mux.ServeHTTP(w, dup)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("dup feed: %d %s", w.Code, w.Body.Bytes())
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		got, _ := a.db.GetFilterFeed(feed.ID)
+		if got.LastCount >= 2 && a.filters.blocked("evil.list.test.") && a.filters.blocked("ads.list.test.") {
+			feed = got
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if feed.LastCount < 2 || !a.filters.blocked("evil.list.test.") {
+		t.Fatalf("async sync %+v blocked=%v", feed, a.filters.blocked("evil.list.test."))
 	}
 
 	r = httptest.NewRequest(http.MethodGet, "/api/v1/filters", nil)

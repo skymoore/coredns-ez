@@ -118,6 +118,7 @@ CREATE TABLE IF NOT EXISTS filter_feeds (
   etag TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS filter_feeds_action_url ON filter_feeds(action, url);
 CREATE TABLE IF NOT EXISTS filter_rules (
   id TEXT PRIMARY KEY,
   action TEXT NOT NULL,
@@ -194,6 +195,12 @@ func (s *Store) migrate() error {
 	_, _ = s.db.Exec(`ALTER TABLE cluster_members ADD COLUMN role TEXT NOT NULL DEFAULT 'secondary'`)
 	_, _ = s.db.Exec(`ALTER TABLE oidc_config ADD COLUMN button_text TEXT NOT NULL DEFAULT ''`)
 	_, _ = s.db.Exec(`ALTER TABLE oidc_config ADD COLUMN button_image TEXT NOT NULL DEFAULT ''`)
+	if err := s.dedupeFilterFeeds(); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS filter_feeds_action_url ON filter_feeds(action, url)`); err != nil {
+		return err
+	}
 	return nil
 }
 

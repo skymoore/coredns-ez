@@ -17,6 +17,8 @@ const (
 	FilterMaxIntSec     = 7 * 24 * 3600
 )
 
+var ErrFilterFeedExists = fmt.Errorf("list url already present")
+
 // FilterRule is one domain pattern in the compiled allow or block set.
 type FilterRule struct {
 	ID        string `json:"id"`
@@ -82,6 +84,25 @@ func (r FilterRule) Display() string {
 		return "*." + strings.TrimSuffix(r.Pattern, ".")
 	}
 	return strings.TrimSuffix(r.Pattern, ".")
+}
+
+func (s *Store) ListCompiledFilterRules() ([]FilterRule, error) {
+	rows, err := s.db.Query(`SELECT action, pattern, kids_only FROM filter_rules GROUP BY action, pattern, kids_only`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []FilterRule{}
+	for rows.Next() {
+		var r FilterRule
+		var kids int
+		if err := rows.Scan(&r.Action, &r.Pattern, &kids); err != nil {
+			return nil, err
+		}
+		r.KidsOnly = kids != 0
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) ListFilterRules(action, source string) ([]FilterRule, error) {
@@ -208,6 +229,11 @@ func (s *Store) GetFilterFeed(id string) (FilterFeed, error) {
 		`SELECT id, name, action, url, sync, interval_seconds, last_sync_at, last_error, last_count, etag, created_at FROM filter_feeds WHERE id = ?`, id))
 }
 
+func (s *Store) GetFilterFeedByURL(action, rawURL string) (FilterFeed, error) {
+	return scanFilterFeed(s.db.QueryRow(
+		`SELECT id, name, action, url, sync, interval_seconds, last_sync_at, last_error, last_count, etag, created_at FROM filter_feeds WHERE action = ? AND url = ?`, action, rawURL))
+}
+
 func (s *Store) InsertFilterFeed(f FilterFeed) (FilterFeed, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -227,6 +253,12 @@ func (s *Store) InsertFilterFeed(f FilterFeed) (FilterFeed, error) {
 	}
 	_, err := s.db.Exec(`INSERT INTO filter_feeds(id, name, action, url, sync, interval_seconds, last_sync_at, last_error, last_count, etag, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
 		f.ID, f.Name, f.Action, f.URL, f.Sync, f.IntervalSeconds, f.LastSyncAt, f.LastError, f.LastCount, f.ETag, f.CreatedAt)
+	if err != nil && strings.Contains(strings.ToLower(err.Error()), "unique") {
+		existing, gerr := s.GetFilterFeedByURL(f.Action, f.URL)
+		if gerr == nil {
+			return existing, ErrFilterFeedExists
+		}
+	}
 	return f, err
 }
 
@@ -267,16 +299,76 @@ func (s *Store) ReplaceFeedRules(feedID string, rules []FilterRule) error {
 	if _, err := tx.Exec(`DELETE FROM filter_rules WHERE source = ?`, feedID); err != nil {
 		return err
 	}
+	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO filter_rules(id, action, pattern, kids_only, source, created_at) VALUES(?,?,?,?,?,?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	now := nowUnix()
 	for _, r := range rules {
-		r.Source = feedID
-		if _, err := insertFilterRuleLocked(tx, r); err != nil {
-			if strings.Contains(err.Error(), "already listed") {
-				continue
-			}
+		id, err := newID()
+		if err != nil {
+			return err
+		}
+		kids := 0
+		if r.KidsOnly {
+			kids = 1
+		}
+		if _, err := stmt.Exec(id, r.Action, r.Pattern, kids, feedID, now); err != nil {
 			return err
 		}
 	}
 	return tx.Commit()
+}
+
+func (s *Store) dedupeFilterFeeds() error {
+	rows, err := s.db.Query(`SELECT id, action, url, last_count, created_at FROM filter_feeds`)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no such table") {
+			return nil
+		}
+		return err
+	}
+	type row struct {
+		id, action, url string
+		count           int
+		created         int64
+	}
+	var all []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.id, &r.action, &r.url, &r.count, &r.created); err != nil {
+			rows.Close()
+			return err
+		}
+		all = append(all, r)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	keep := map[string]row{}
+	for _, r := range all {
+		key := r.action + "\x00" + r.url
+		prev, ok := keep[key]
+		if !ok || r.count > prev.count || (r.count == prev.count && r.created < prev.created) {
+			keep[key] = r
+		}
+	}
+	for _, r := range all {
+		key := r.action + "\x00" + r.url
+		if keep[key].id == r.id {
+			continue
+		}
+		if _, err := s.db.Exec(`DELETE FROM filter_rules WHERE source = ?`, r.id); err != nil {
+			return err
+		}
+		if _, err := s.db.Exec(`DELETE FROM filter_feeds WHERE id = ?`, r.id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func applyFiltersTx(tx *sql.Tx, feeds []FilterFeed, rules []FilterRule) error {

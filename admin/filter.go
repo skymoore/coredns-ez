@@ -132,21 +132,20 @@ func (a *Admin) handleCreateFilterFeed(w http.ResponseWriter, r *http.Request) {
 		Sync:            syncMode,
 		IntervalSeconds: body.IntervalSeconds,
 	})
+	if err == store.ErrFilterFeedExists {
+		if feed.LastCount == 0 {
+			go a.runFilterSync(feed.ID)
+		}
+		writeError(w, http.StatusConflict, "list url already present")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if err := a.syncFilterFeed(feed.ID); err != nil {
-		_ = a.db.DeleteFilterFeed(feed.ID)
-		writeError(w, http.StatusBadGateway, err.Error())
-		return
-	}
-	feed, _ = a.db.GetFilterFeed(feed.ID)
-	a.publishFilter()
-	_, _ = a.db.BumpGeneration()
-	go a.pushSnapshot()
 	a.db.Audit(actorFrom(r).Username, "filter.feed.create", "", feed.URL)
 	writeJSON(w, http.StatusCreated, feed)
+	go a.runFilterSync(feed.ID)
 }
 
 func (a *Admin) handlePatchFilterFeed(w http.ResponseWriter, r *http.Request) {
@@ -197,16 +196,10 @@ func (a *Admin) handleSyncFilterFeed(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
-	if err := a.syncFilterFeed(id); err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
-		return
-	}
+	go a.runFilterSync(id)
 	feed, _ := a.db.GetFilterFeed(id)
-	a.publishFilter()
-	_, _ = a.db.BumpGeneration()
-	go a.pushSnapshot()
 	a.db.Audit(actorFrom(r).Username, "filter.feed.sync", "", feed.URL)
-	writeJSON(w, http.StatusOK, feed)
+	writeJSON(w, http.StatusAccepted, feed)
 }
 
 func (a *Admin) handleDeleteFilterFeed(w http.ResponseWriter, r *http.Request) {
@@ -231,7 +224,7 @@ func (a *Admin) publishFilter() {
 	if a.filters == nil {
 		a.filters = newFilterEngine()
 	}
-	rules, err := a.db.ListFilterRules("", "")
+	rules, err := a.db.ListCompiledFilterRules()
 	if err != nil {
 		log.Warningf("filter load: %v", err)
 		return
@@ -288,7 +281,33 @@ func (a *Admin) syncDueFeeds() {
 	}
 }
 
+func (a *Admin) runFilterSync(id string) {
+	if err := a.syncFilterFeed(id); err != nil {
+		log.Warningf("filter feed %s: %v", id, err)
+		return
+	}
+	a.publishFilter()
+	_, _ = a.db.BumpGeneration()
+	go a.pushSnapshot()
+}
+
 func (a *Admin) syncFilterFeed(id string) error {
+	a.filterSyncMu.Lock()
+	if a.filterSyncing == nil {
+		a.filterSyncing = map[string]struct{}{}
+	}
+	if _, busy := a.filterSyncing[id]; busy {
+		a.filterSyncMu.Unlock()
+		return nil
+	}
+	a.filterSyncing[id] = struct{}{}
+	a.filterSyncMu.Unlock()
+	defer func() {
+		a.filterSyncMu.Lock()
+		delete(a.filterSyncing, id)
+		a.filterSyncMu.Unlock()
+	}()
+
 	feed, err := a.db.GetFilterFeed(id)
 	if err != nil {
 		return err
