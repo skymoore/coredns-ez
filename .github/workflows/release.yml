@@ -58,7 +58,7 @@ jobs:
       GOPROXY: https://proxy.golang.org,direct
     steps:
       - name: Check out plugins
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -131,7 +131,7 @@ jobs:
 
       - name: Upload source tree
         if: steps.info.outputs.skip != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-src
           path: ${{ runner.temp }}/release-src
@@ -177,20 +177,20 @@ jobs:
       GOPROXY: https://proxy.golang.org,direct
     steps:
       - name: Check out plugins
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Download source tree
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: release-src
           path: src
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version-file: src/coredns/go-version
+          go-version-file: src/coredns/.go-version
           cache-dependency-path: src/coredns/go.sum
 
       - name: Install zip
@@ -211,7 +211,7 @@ jobs:
             --out-dir dist
 
       - name: Upload ${{ matrix.goos }}/${{ matrix.goarch }} archives
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coredns-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/*
@@ -228,7 +228,7 @@ jobs:
       contents: write
     steps:
       - name: Download archives
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: coredns-*
           merge-multiple: true
@@ -299,7 +299,7 @@ jobs:
           EOF
 
       - name: Publish release
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        uses: softprops/action-gh-release@v3
         with:
           body_path: release.md
           name: ${{ needs.prepare.outputs.tag }}
