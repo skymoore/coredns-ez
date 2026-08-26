@@ -1,0 +1,25 @@
+# Primary: dns-update-persistent owns example.com.
+# Do not also configure file, auto, secondary, or secondary-persistent here.
+example.com {
+	health :8080
+	errors
+	log
+
+	tsig {
+		secret updater.example.com. Y29yZWRucy1pbnRlZ3JhdGlvbi10ZXN0LWtleSEh
+		require_opcode UPDATE
+	}
+
+	dns-update-persistent {
+		file /var/lib/coredns/db.example.com
+		mutable A AAAA NS CNAME MX TXT SRV NAPTR DS SSHFP TLSA CAA URI LOC HINFO RP HTTPS SVCB PTR EUI48 EUI64 CERT KX AFSDB CDS CDNSKEY OPENPGPKEY SMIMEA
+	}
+
+	ixfr
+
+	# "*" lets the tester AXFR. The secondary IP is listed so NOTIFY is
+	# actually sent (`to *` is skipped by the transfer plugin's Notify).
+	transfer {
+		to * 172.30.53.20
+	}
+}

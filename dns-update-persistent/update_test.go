@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/coredns/coredns/plugin/transfer"
 	"github.com/miekg/dns"
+	"github.com/skymoore/coredns-plugins/ixfr"
 )
 
 const seedZone = `$ORIGIN example.org.
@@ -114,6 +116,19 @@ func send(t *testing.T, d *UpdatePersist, m *dns.Msg) int {
 		t.Errorf("response opcode = %s, want UPDATE", dns.OpcodeToString[w.msg.Opcode])
 	}
 	return w.msg.Rcode
+}
+
+type nestedWriter struct {
+	dns.ResponseWriter
+}
+
+func TestUnwrapResponseWriter(t *testing.T) {
+	inner := &testWriter{tsigOK: true}
+	outer := &nestedWriter{ResponseWriter: inner}
+	got := unwrapResponseWriter(outer)
+	if got != inner {
+		t.Fatalf("unwrap = %T, want *testWriter", got)
+	}
 }
 
 func rr(t *testing.T, s string) dns.RR {
@@ -262,6 +277,53 @@ func TestTransferIncludesDynamicRecords(t *testing.T) {
 	}
 	if !found {
 		t.Error("the dynamically added TXT was not in the AXFR stream")
+	}
+}
+
+func TestTransferDefersToIXFR(t *testing.T) {
+	d := newTestPlugin(t, nil)
+	jpath := filepath.Join(t.TempDir(), "j.ixfr")
+	x := &ixfr.IXFR{}
+	if err := x.Register(d.Zone, jpath, d.rrs); err != nil {
+		t.Fatal(err)
+	}
+	d.ixfr = x
+
+	_, err := d.Transfer(d.Zone, 0)
+	if err != transfer.ErrNotAuthoritative {
+		t.Fatalf("Transfer = %v, want ErrNotAuthoritative", err)
+	}
+
+	before := serialOf(t, d)
+	m := newUpdate(nil, []dns.RR{rr(t, `_acme-challenge.example.org. 60 IN TXT "ixfr-delta"`)})
+	if got := send(t, d, m); got != dns.RcodeSuccess {
+		t.Fatalf("add: %s", dns.RcodeToString[got])
+	}
+
+	ch, err := x.Transfer(d.Zone, before)
+	if err != nil {
+		t.Fatalf("ixfr Transfer: %v", err)
+	}
+	var sawTXT, sawWWW bool
+	for batch := range ch {
+		for _, r := range batch {
+			switch v := r.(type) {
+			case *dns.TXT:
+				if len(v.Txt) > 0 && v.Txt[0] == "ixfr-delta" {
+					sawTXT = true
+				}
+			case *dns.A:
+				if v.Hdr.Name == "www.example.org." {
+					sawWWW = true
+				}
+			}
+		}
+	}
+	if !sawTXT {
+		t.Fatal("IXFR missing the committed TXT")
+	}
+	if sawWWW {
+		t.Fatal("IXFR included unchanged www (not a delta)")
 	}
 }
 

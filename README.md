@@ -24,6 +24,19 @@ Add it to CoreDNS `plugin.cfg` immediately after `file`:
 ```
 file:file
 dns-update-persistent:github.com/skymoore/coredns-plugins/dns-update-persistent
+ixfr:github.com/skymoore/coredns-plugins/ixfr
 ```
 
-Do not configure `file`, `dynupdate`, `secondary`, or `secondary-persistent` for the same origin.
+Do not configure `file`, `auto`, `dynupdate`, `secondary`, or `secondary-persistent` for the same origin.
+
+## ixfr
+
+RFC 1995 incremental transfers for a zone owned by *dns-update-persistent*. Without it, that plugin uses CoreDNS's AXFR-style IXFR fallback. See [ixfr/README.md](ixfr/README.md).
+
+## Integration tests
+
+`integration-test/` builds CoreDNS v1.14.7 with both plugins, runs a primary (`dns-update-persistent`) and a secondary (`secondary-persistent`) in Docker Compose, and checks queries, AXFR, IXFR, RFC 2136 updates, and persist-across-restart. See [integration-test/README.md](integration-test/README.md).
+
+```
+./integration-test/scripts/run.sh
+```

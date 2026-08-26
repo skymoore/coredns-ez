@@ -8,7 +8,7 @@
 
 *dns-update-persistent* implements [RFC 2136](https://www.rfc-editor.org/rfc/rfc2136) DNS UPDATE for a single zone, then atomically replaces that zone's master file after every mutating update. It is the durable counterpart of the in-memory *dynupdate* example: adds appear on disk, deletes disappear, and a restart serves the last successfully committed generation.
 
-CoreDNS's server does not filter on opcode: an UPDATE's Zone section occupies the question slot and ZCLASS is `IN`, so an UPDATE reaches the plugin chain like any query. This plugin dispatches on opcode and hands everything else to a `file` view of the same zone.
+CoreDNS's plugin chain does not filter on opcode: an UPDATE's Zone section occupies the question slot and ZCLASS is `IN`, so an UPDATE is dispatched like any query once it is accepted. miekg/dns's default accept function, however, replies NOTIMP to every opcode other than QUERY and NOTIFY *before* that chain runs. This plugin replaces that default so RFC 2136 messages are accepted (exactly one Zone section; prerequisites and updates may be large). It then dispatches on opcode and hands everything else to a `file` view of the same zone.
 
 ### This plugin owns the zone
 
@@ -57,14 +57,17 @@ dns-update-persistent [ZONE] {
 
 ## Compilation
 
-Add this line to CoreDNS `plugin.cfg` immediately after `file`:
+Add these lines to CoreDNS `plugin.cfg` immediately after `file`:
 
 ```
 file:file
 dns-update-persistent:github.com/skymoore/coredns-plugins/dns-update-persistent
+ixfr:github.com/skymoore/coredns-plugins/ixfr
 ```
 
 Then rebuild (`go generate && go build`). Do not configure *file*, *dynupdate*, *secondary*, or *secondary-persistent* for the same origin.
+
+Put *ixfr* in the same server block to serve RFC 1995 incremental IXFR after UPDATEs. Without it, outgoing IXFR is CoreDNS's full-zone fallback (`file.Zone.Transfer`).
 
 ## What is implemented
 
@@ -112,6 +115,8 @@ example.org {
         mutable TXT
     }
 
+    ixfr
+
     transfer {
         to 192.0.2.53
     }
@@ -132,4 +137,4 @@ After `send`, `/var/lib/coredns/db.example.org` contains that TXT and a bumped S
 
 ## See Also
 
-RFC 2136 for the update protocol, RFC 8945 for TSIG, and CoreDNS's *tsig*, *file* and *transfer* plugins, all three of which this composes with rather than reimplements. *secondary-persistent* is the durable *secondary* counterpart; this plugin is a durable *primary*.
+RFC 2136 for the update protocol, RFC 8945 for TSIG, and CoreDNS's *tsig*, *file* and *transfer* plugins, all three of which this composes with rather than reimplements. *ixfr* is the RFC 1995 journal this plugin commits into. *secondary-persistent* is the durable *secondary* counterpart; this plugin is a durable *primary*.

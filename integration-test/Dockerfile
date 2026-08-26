@@ -1,0 +1,98 @@
+# syntax=docker/dockerfile:1
+#
+# Builds CoreDNS v1.14.7 with every default plugin plus the out-of-tree
+# plugins in this repo: dns-update-persistent and ixfr (after file),
+# secondary-persistent (after secondary).
+#
+# Build from the repository root:
+#   docker build -f integration-test/Dockerfile .
+
+ARG GO_IMAGE=golang:1.26
+ARG COREDNS_VERSION=v1.14.7
+ARG DEBIAN_IMAGE=debian:bookworm-slim
+
+# -----------------------------------------------------------------------------
+# Compile CoreDNS with both plugins.
+# -----------------------------------------------------------------------------
+FROM ${GO_IMAGE} AS build
+ARG COREDNS_VERSION
+ENV CGO_ENABLED=0 \
+    GOTOOLCHAIN=auto \
+    GOFLAGS=-buildvcs=false \
+    GOPROXY=https://proxy.golang.org,direct
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+RUN git clone --depth 1 --branch "${COREDNS_VERSION}" https://github.com/coredns/coredns.git
+
+WORKDIR /plugins
+COPY go.mod go.sum ./
+COPY dns-update-persistent ./dns-update-persistent
+COPY ixfr ./ixfr
+COPY secondary-persistent ./secondary-persistent
+
+WORKDIR /src/coredns
+# plugin.cfg order is the request chain. These two must sit next to the
+# in-tree plugins they replace rather than at the end (COREDNS_PLUGINS
+# would append them after whoami/forward, which is the wrong slot).
+RUN sed -i \
+    -e '/^file:file$/a dns-update-persistent:github.com/skymoore/coredns-plugins/dns-update-persistent' \
+    plugin.cfg \
+    && sed -i \
+    -e '/^dns-update-persistent:/a ixfr:github.com/skymoore/coredns-plugins/ixfr' \
+    plugin.cfg \
+    && sed -i \
+    -e '/^secondary:secondary$/a secondary-persistent:github.com/skymoore/coredns-plugins/secondary-persistent' \
+    plugin.cfg \
+    && printf '\nreplace github.com/skymoore/coredns-plugins => /plugins\n' >> go.mod \
+    && printf '\nreplace github.com/coredns/coredns => /src/coredns\n' >> /plugins/go.mod
+
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go generate coredns.go \
+    && go get \
+    && go build -tags grpcnotrace \
+        -ldflags="-s -w -X github.com/coredns/coredns/coremain.GitCommit=integration-${COREDNS_VERSION}" \
+        -o /out/coredns .
+
+# -----------------------------------------------------------------------------
+# Runtime image used by primary and secondary.
+# -----------------------------------------------------------------------------
+FROM ${DEBIAN_IMAGE} AS coredns
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /var/lib/coredns /etc/coredns /zones
+
+COPY --from=build /out/coredns /usr/bin/coredns
+COPY integration-test/entrypoint.sh /entrypoint.sh
+RUN chmod 0755 /entrypoint.sh /usr/bin/coredns
+
+# Integration tests rewrite bind-mounted persist files; run as root so the
+# volume owner does not have to match a distroless uid.
+EXPOSE 53 53/udp 8080
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["-conf", "/etc/coredns/Corefile"]
+
+# -----------------------------------------------------------------------------
+# Test runner: dig, nsupdate, bash.
+# -----------------------------------------------------------------------------
+FROM ${DEBIAN_IMAGE} AS tester
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        bind9-dnsutils \
+        bash \
+        ca-certificates \
+        curl \
+        grep \
+        gawk \
+        coreutils \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /scripts
+COPY integration-test/scripts /scripts
+RUN chmod 0755 /scripts/*.sh
+ENTRYPOINT ["/scripts/run-tests.sh"]

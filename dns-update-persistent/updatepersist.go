@@ -44,6 +44,7 @@ import (
 	"github.com/coredns/coredns/plugin/file"
 	clog "github.com/coredns/coredns/plugin/pkg/log"
 	"github.com/coredns/coredns/plugin/transfer"
+	"github.com/skymoore/coredns-plugins/ixfr"
 
 	"github.com/miekg/dns"
 )
@@ -65,6 +66,11 @@ type UpdatePersist struct {
 	// only picks the change up at its next refresh, which for an ACME
 	// challenge is indistinguishable from the update never happening.
 	Xfer *transfer.Transfer
+
+	// ixfr, when the `ixfr` plugin is in the same server block, is the
+	// Transferer for this origin. This plugin then returns ErrNotAuthoritative
+	// from Transfer so first-Transferer-wins lands on the journal.
+	ixfr *ixfr.IXFR
 
 	// mutable, when non-nil, is the set of RR types this plugin will let an
 	// UPDATE touch. nil means "no type policy" — RFC 2136's own rules still
@@ -106,9 +112,11 @@ func (d *UpdatePersist) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *d
 // exists to publish would be invisible to every secondary.
 func (d *UpdatePersist) Transfer(zone string, serial uint32) (<-chan []dns.RR, error) {
 	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if d.ixfr != nil {
+		return nil, transfer.ErrNotAuthoritative
+	}
 	view := d.view
-	d.mu.RUnlock()
-
 	return view.Transfer(zone, serial)
 }
 

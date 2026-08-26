@@ -1,0 +1,99 @@
+name: coredns-plugins-it
+
+# Fixed addresses: CoreDNS transfer { from|to } accepts only IPs (not DNS
+# names). Notify matching also compares the source IP to transfer-from.
+networks:
+  dnsnet:
+    ipam:
+      config:
+        - subnet: 172.30.53.0/24
+
+volumes:
+  primary-data:
+  secondary-data:
+
+x-coredns: &coredns
+  build:
+    context: ..
+    dockerfile: integration-test/Dockerfile
+    target: coredns
+  restart: unless-stopped
+  networks:
+    dnsnet: {}
+
+services:
+  primary:
+    <<: *coredns
+    hostname: primary
+    networks:
+      dnsnet:
+        ipv4_address: 172.30.53.10
+    environment:
+      ZONE_SEED: /zones/db.example.com
+      ZONE_LIVE: /var/lib/coredns/db.example.com
+    volumes:
+      - ./test-zone/Corefile:/etc/coredns/Corefile:ro
+      - ./test-zone/db.example.com:/zones/db.example.com:ro
+      - primary-data:/var/lib/coredns
+    ports:
+      - "1053:53/udp"
+      - "1053:53/tcp"
+      - "18080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+      start_period: 5s
+
+  secondary:
+    <<: *coredns
+    hostname: secondary
+    networks:
+      dnsnet:
+        ipv4_address: 172.30.53.20
+    volumes:
+      - ./test-zone/Corefile.secondary:/etc/coredns/Corefile:ro
+      - secondary-data:/var/lib/coredns
+    ports:
+      - "1153:53/udp"
+      - "1153:53/tcp"
+      - "18081:8080"
+    depends_on:
+      primary:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+      start_period: 5s
+
+  tester:
+    build:
+      context: ..
+      dockerfile: integration-test/Dockerfile
+      target: tester
+    networks:
+      dnsnet:
+        ipv4_address: 172.30.53.30
+    volumes:
+      - ./scripts:/scripts:ro
+      - primary-data:/primary-data:ro
+      - secondary-data:/secondary-data:ro
+    depends_on:
+      primary:
+        condition: service_healthy
+      secondary:
+        condition: service_healthy
+    profiles:
+      - test
+    environment:
+      PRIMARY: 172.30.53.10
+      SECONDARY: 172.30.53.20
+      ZONE: example.com
+      PRIMARY_ZONEFILE: /primary-data/db.example.com
+      SECONDARY_ZONEFILE: /secondary-data/db.example.com
+      TSIG_NAME: updater.example.com.
+      TSIG_SECRET: Y29yZWRucy1pbnRlZ3JhdGlvbi10ZXN0LWtleSEh
+      TSIG_ALG: hmac-sha256

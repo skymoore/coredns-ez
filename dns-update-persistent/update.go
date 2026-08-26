@@ -1,6 +1,8 @@
 package dnsupdatepersist
 
 import (
+	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/miekg/dns"
@@ -36,7 +38,8 @@ func (d *UpdatePersist) serveUpdate(w dns.ResponseWriter, r *dns.Msg) (int, erro
 	// and "the operator surely configured tsig in front" is not an access
 	// control. There is deliberately no insecure mode.
 	if !tsigVerified(w, r) {
-		log.Warningf("refusing unsigned or unverified UPDATE for %s from %s", zone, w.RemoteAddr())
+		log.Warningf("refusing unsigned or unverified UPDATE for %s from %s writer=%T",
+			zone, w.RemoteAddr(), w)
 		return d.reply(w, r, dns.RcodeRefused)
 	}
 
@@ -64,6 +67,13 @@ func (d *UpdatePersist) serveUpdate(w dns.ResponseWriter, r *dns.Msg) (int, erro
 		log.Errorf("persisting %s to %s: %v", zone, d.seedPath, err)
 		writeCount.WithLabelValues(d.Zone, "error").Inc()
 		return d.reply(w, r, dns.RcodeServerFailure)
+	}
+	if d.ixfr != nil {
+		if err := d.ixfr.Commit(d.rrs, updated); err != nil {
+			log.Errorf("ixfr journal for %s: %v", zone, err)
+			writeCount.WithLabelValues(d.Zone, "error").Inc()
+			return d.reply(w, r, dns.RcodeServerFailure)
+		}
 	}
 	writeCount.WithLabelValues(d.Zone, "ok").Inc()
 	if soa := soaOf(updated); soa != nil {
@@ -93,12 +103,52 @@ func (d *UpdatePersist) serveUpdate(w dns.ResponseWriter, r *dns.Msg) (int, erro
 // validated. w is wrapped by CoreDNS (ScrubWriter, and the tsig plugin's own
 // writer), so the status is reached through an interface assertion rather than
 // off the concrete type.
+//
+// The tsig plugin strips the TSIG RR after a successful verify, so a live
+// request reaching this plugin often has r.IsTsig() == nil. That wrapper is
+// unexported (*tsig.restoreTsigWriter); seeing it with a nil TsigStatus is
+// the production signal that verification happened. Unit tests keep the RR
+// on the message and use a fake writer.
 func tsigVerified(w dns.ResponseWriter, r *dns.Msg) bool {
-	if r.IsTsig() == nil {
+	s, ok := w.(interface{ TsigStatus() error })
+	if !ok || s.TsigStatus() != nil {
 		return false
 	}
-	s, ok := w.(interface{ TsigStatus() error })
-	return ok && s.TsigStatus() == nil
+	if r.IsTsig() != nil {
+		return true
+	}
+	// tsig plugin strips the RR and wraps w; NextOrFailure then wraps again
+	// with *plugin.pluginWriter. Walk the exported ResponseWriter field.
+	for cur, n := w, 0; cur != nil && n < 8; n++ {
+		if strings.HasSuffix(fmt.Sprintf("%T", cur), "tsig.restoreTsigWriter") {
+			return true
+		}
+		next := unwrapResponseWriter(cur)
+		if next == nil || next == cur {
+			break
+		}
+		cur = next
+	}
+	return false
+}
+
+func unwrapResponseWriter(w dns.ResponseWriter) dns.ResponseWriter {
+	v := reflect.ValueOf(w)
+	for v.Kind() == reflect.Pointer {
+		if v.IsNil() {
+			return nil
+		}
+		v = v.Elem()
+	}
+	if v.Kind() != reflect.Struct {
+		return nil
+	}
+	f := v.FieldByName("ResponseWriter")
+	if !f.IsValid() || !f.CanInterface() {
+		return nil
+	}
+	inner, _ := f.Interface().(dns.ResponseWriter)
+	return inner
 }
 
 // checkPrereqs implements §3.2. All five prerequisite forms are supported;

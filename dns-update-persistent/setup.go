@@ -11,6 +11,7 @@ import (
 	"github.com/coredns/coredns/plugin"
 	"github.com/coredns/coredns/plugin/file"
 	"github.com/coredns/coredns/plugin/transfer"
+	"github.com/skymoore/coredns-plugins/ixfr"
 
 	"github.com/miekg/dns"
 )
@@ -42,11 +43,19 @@ func setup(c *caddy.Controller) error {
 	})
 
 	c.OnStartup(func() error {
-		// The transfer plugin registers itself in the same server block, so it
-		// can only be found after every setup function has run.
+		// The transfer and ixfr plugins register in the same server block, so
+		// they can only be found after every setup function has run.
 		if t := dnsserver.GetConfig(c).Handler("transfer"); t != nil {
 			if xfer, ok := t.(*transfer.Transfer); ok {
 				d.Xfer = xfer
+			}
+		}
+		if h := dnsserver.GetConfig(c).Handler("ixfr"); h != nil {
+			if x, ok := h.(*ixfr.IXFR); ok {
+				d.ixfr = x
+				if err := x.Register(d.Zone, d.seedPath+".ixfr", d.rrs); err != nil {
+					log.Warningf("ixfr register %s: %v", d.Zone, err)
+				}
 			}
 		}
 		return nil

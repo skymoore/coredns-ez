@@ -1,0 +1,16 @@
+# Secondary: secondary-persistent transfers example.com from the primary
+# and writes the same RFC 1035 master after each successful AXFR/IXFR.
+example.com {
+	health :8080
+	errors
+	log
+
+	secondary-persistent {
+		transfer from 172.30.53.10
+		persist /var/lib/coredns/db.example.com
+	}
+
+	transfer {
+		to *
+	}
+}
