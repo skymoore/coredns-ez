@@ -160,6 +160,14 @@ host_goarch() {
   esac
 }
 
+PACKAGE_WORK=""
+cleanup_package_work() {
+  if [[ -n "${PACKAGE_WORK:-}" ]]; then
+    rm -rf "${PACKAGE_WORK}"
+    PACKAGE_WORK=""
+  fi
+}
+
 cmd_package() {
   local src_dir="" goos="" goarch="" version="" gitcommit="" out_dir=""
   while [[ $# -gt 0 ]]; do
@@ -208,9 +216,11 @@ cmd_package() {
   if [[ "$goos" == windows ]]; then
     bin="coredns.exe"
   fi
-  local work
-  work="$(mktemp -d "${TMPDIR:-/tmp}/coredns-pkg.XXXXXX")"
-  trap 'rm -rf "$work"' EXIT
+  # Global, not `local`: an EXIT trap that names a function-local variable
+  # runs after the function returns, and `set -u` then fails with
+  # `work: unbound variable`.
+  PACKAGE_WORK="$(mktemp -d "${TMPDIR:-/tmp}/coredns-pkg.XXXXXX")"
+  trap cleanup_package_work EXIT
 
   local go_version
   go_version="$(read_go_version "$coredns_dir")"
@@ -225,24 +235,24 @@ cmd_package() {
     export GOARCH="$goarch"
     go build -v -tags="${GOTAGS}" \
       -ldflags="-s -w -X github.com/coredns/coredns/coremain.GitCommit=${gitcommit}" \
-      -o "${work}/${bin}" .
+      -o "${PACKAGE_WORK}/${bin}" .
   )
 
   if [[ "$goos" == linux && "$goarch" == "$(host_goarch)" ]]; then
     local plugins_out
-    plugins_out="$("${work}/${bin}" -plugins)"
+    plugins_out="$("${PACKAGE_WORK}/${bin}" -plugins)"
     log "$plugins_out"
     local want
     for want in dns-update-persistent ixfr secondary-persistent file secondary kubernetes; do
       grep -F -q "$want" <<<"$plugins_out" || die "binary is missing plugin: $want"
     done
-    "${work}/${bin}" -version
+    "${PACKAGE_WORK}/${bin}" -version
   fi
 
   local stem="coredns_${version}_${goos}_${goarch}"
-  tar -zcf "${out_dir}/${stem}.tgz" -C "$work" "$bin"
+  tar -zcf "${out_dir}/${stem}.tgz" -C "$PACKAGE_WORK" "$bin"
   if [[ "$goos" == windows ]]; then
-    (cd "$work" && zip -q -j "${out_dir}/${stem}.zip" "$bin")
+    (cd "$PACKAGE_WORK" && zip -q -j "${out_dir}/${stem}.zip" "$bin")
   fi
   (
     cd "$out_dir"
@@ -252,6 +262,8 @@ cmd_package() {
     done
   )
   ls -la "$out_dir"
+  cleanup_package_work
+  trap - EXIT
 }
 
 cmd="${1:-}"
