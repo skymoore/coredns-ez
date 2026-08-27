@@ -312,7 +312,7 @@ stage_bootstrap() {
 
 stage_admin() {
 	echo "-- admin plugin on DoH :8443"
-	local code body token resp
+	local code body token resp join_tok hangup_out stoken
 
 	resp=$(curl -sS -w '\n%{http_code}' "$API_PRIMARY/api/v1/health" || true)
 	code=$(api_code "$resp")
@@ -470,14 +470,32 @@ stage_admin() {
 		return
 	fi
 
-	resp=$(curl -sS -w '\n%{http_code}' -X POST "$API_SECONDARY/api/v1/cluster/connect" \
-		-H 'Content-Type: application/json' \
-		-d "{\"url\":\"$API_PRIMARY\",\"token\":\"$join_tok\",\"dns\":\"$SECONDARY:53\",\"api_url\":\"$API_SECONDARY\"}")
-	code=$(api_code "$resp")
-	if [[ "$code" == "200" ]]; then
-		pass "POST secondary /api/v1/cluster/connect"
+	# Hang up after the 200 headers: snapshot apply can drop TLS the way the
+	# admin UI saw on ns2. The node must already be secondary (GET /node).
+	hangup_out=""
+	if hangup_out=$(python3 "$SCRIPT_DIR/connect-hangup.py" "$API_SECONDARY" "$API_PRIMARY" "$join_tok" "$SECONDARY"); then
+		pass "POST /cluster/connect flushes 200 before snapshot apply ($hangup_out)"
 	else
-		fail "POST secondary /api/v1/cluster/connect" "code=$code body=$(api_body "$resp")"
+		fail "POST /cluster/connect flushes 200 before snapshot apply" "$hangup_out"
+		return
+	fi
+	# Apply continues after the client is gone; wait for identity to land.
+	stoken=""
+	i=0
+	while [[ "$i" -lt 20 ]]; do
+		stoken=$(api_login "$API_SECONDARY" || true)
+		[[ -n "$stoken" && "$stoken" != "null" ]] && break
+		i=$((i + 1))
+		sleep 1
+	done
+	resp=$(curl -sS -w '\n%{http_code}' "$API_SECONDARY/api/v1/node" \
+		-H "Authorization: Bearer ${stoken:-x}")
+	code=$(api_code "$resp")
+	body=$(api_body "$resp")
+	if [[ "$code" == "200" ]] && printf '%s' "$body" | grep -q '"role":"secondary"'; then
+		pass "GET /node is secondary after hung-up connect (UI recovery path)"
+	else
+		fail "GET /node is secondary after hung-up connect (UI recovery path)" "code=$code body=$body"
 		return
 	fi
 
@@ -491,7 +509,6 @@ stage_admin() {
 		fail "GET primary /api/v1/cluster lists primary and secondary" "code=$code body=$body"
 	fi
 
-	local stoken
 	stoken=$(api_login "$API_SECONDARY" || true)
 	if [[ -n "$stoken" && "$stoken" != "null" ]]; then
 		pass "login on secondary with primary credentials"

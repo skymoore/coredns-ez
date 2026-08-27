@@ -3,9 +3,11 @@ package admin
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/miekg/dns"
 	"github.com/skymoore/coredns-ez/admin/store"
@@ -22,6 +24,20 @@ func (s snapPrimary) Records() []dns.RR {
 }
 func (s snapPrimary) Apply(_, _ []dns.RR) error { return nil }
 func (s snapPrimary) Path() string              { return s.path }
+
+func TestNormalizeJoinURL(t *testing.T) {
+	got, err := normalizeJoinURL("ns1.dns.rwx.dev")
+	if err != nil || got != "https://ns1.dns.rwx.dev" {
+		t.Fatalf("%q %v", got, err)
+	}
+	got, err = normalizeJoinURL(" https://ns1.dns.rwx.dev/ ")
+	if err != nil || got != "https://ns1.dns.rwx.dev" {
+		t.Fatalf("trim %q %v", got, err)
+	}
+	if _, err := normalizeJoinURL("  "); err == nil {
+		t.Fatal("empty url")
+	}
+}
 
 func TestNormalizeDNSAddr(t *testing.T) {
 	got, err := normalizeDNSAddr(" 203.0.113.10 ")
@@ -451,6 +467,88 @@ func TestApplySnapshotReloadsSecondaryRecords(t *testing.T) {
 		if origin == "empty.test." {
 			t.Fatal("empty zone without SOA should not be transferred")
 		}
+	}
+}
+
+func TestClusterConnectFlushBeforeApply(t *testing.T) {
+	prim := testAdmin(t)
+	sec := testAdmin(t)
+	primSrv := httptest.NewServer(prim.mux)
+	t.Cleanup(primSrv.Close)
+	secSrv := httptest.NewServer(sec.mux)
+	t.Cleanup(secSrv.Close)
+
+	ptok := loginToken(t, prim)
+	mint := httptest.NewRequest(http.MethodPost, "/api/v1/cluster/join-tokens", bytes.NewReader([]byte(`{"ttl":"1h"}`)))
+	mint.Header.Set("Authorization", "Bearer "+ptok)
+	mint.Header.Set("Content-Type", "application/json")
+	mw := httptest.NewRecorder()
+	prim.mux.ServeHTTP(mw, mint)
+	var tok struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(mw.Body.Bytes(), &tok); err != nil || tok.Token == "" {
+		t.Fatalf("mint: %d %s", mw.Code, mw.Body.Bytes())
+	}
+
+	flushed := make(chan struct{})
+	unblock := make(chan struct{})
+	t.Cleanup(func() { testAfterConnectFlush = nil })
+	testAfterConnectFlush = func() {
+		close(flushed)
+		<-unblock
+	}
+
+	stok := loginToken(t, sec)
+	body, _ := json.Marshal(map[string]string{
+		"url": primSrv.URL, "token": tok.Token, "dns": "192.0.2.20:53", "name": "ns2",
+	})
+	type result struct {
+		code int
+		body []byte
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		req, _ := http.NewRequest(http.MethodPost, secSrv.URL+"/api/v1/cluster/connect", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+stok)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			done <- result{err: err}
+			return
+		}
+		b, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		done <- result{code: resp.StatusCode, body: b}
+	}()
+
+	select {
+	case <-flushed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("200 was not flushed before applySnapshot")
+	}
+
+	nr, _ := http.NewRequest(http.MethodGet, secSrv.URL+"/api/v1/node", nil)
+	nr.Header.Set("Authorization", "Bearer "+stok)
+	nresp, err := http.DefaultClient.Do(nr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nb, _ := io.ReadAll(nresp.Body)
+	_ = nresp.Body.Close()
+	if nresp.StatusCode != http.StatusOK || !bytes.Contains(nb, []byte(`"role":"secondary"`)) {
+		close(unblock)
+		t.Fatalf("GET /node during apply: %d %s", nresp.StatusCode, nb)
+	}
+
+	close(unblock)
+	got := <-done
+	if got.err != nil {
+		t.Fatal(got.err)
+	}
+	if got.code != http.StatusOK || !bytes.Contains(got.body, []byte(`"status":"joined"`)) {
+		t.Fatalf("connect after apply: %d %s", got.code, got.body)
 	}
 }
 

@@ -38,6 +38,32 @@ func newOIDC(ctx context.Context, c oidcSettings) (*oidcRuntime, error) {
 	}, nil
 }
 
+// oidcProvisionRole is the role for a newly created OIDC user.
+// Empty DB → admin. Password login on → later OIDC users are viewers.
+// Password off → leftover bootstrap_admin cannot sign in, so the first
+// federated user is admin (installer seeds that local user before OIDC).
+func oidcProvisionRole(passwordOn bool, bootstrap string, users []store.User) string {
+	boot := store.NormalizeUsername(bootstrap)
+	if boot == "" {
+		boot = "admin"
+	}
+	if len(users) == 0 {
+		return store.RoleAdmin
+	}
+	if passwordOn {
+		return store.RoleViewer
+	}
+	for _, u := range users {
+		if u.Disabled || u.Role != store.RoleAdmin {
+			continue
+		}
+		if store.NormalizeUsername(u.Username) != boot {
+			return store.RoleViewer
+		}
+	}
+	return store.RoleAdmin
+}
+
 func (a *Admin) oidcRedirectURL(r *http.Request) string {
 	if a.cfg.OIDC != nil && strings.TrimSpace(a.cfg.OIDC.RedirectURL) != "" {
 		return a.cfg.OIDC.RedirectURL
@@ -143,12 +169,8 @@ func (a *Admin) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	u, err := a.db.GetUserByName(name)
 	if err != nil {
 		hash, _ := hashPassword(hex.EncodeToString(make([]byte, 16)))
-		// Empty DB: first OIDC login is admin (password-off has no bootstrap user).
-		role := store.RoleViewer
-		n, _ := a.db.UserCount()
-		if n == 0 {
-			role = store.RoleAdmin
-		}
+		users, _ := a.db.ListUsers()
+		role := oidcProvisionRole(a.cfg.Password, a.cfg.BootstrapAdmin, users)
 		u = store.User{Username: name, PasswordHash: hash, Role: role}
 		if err := a.db.CreateUser(u); err != nil {
 			writeError(w, http.StatusInternalServerError, "user")

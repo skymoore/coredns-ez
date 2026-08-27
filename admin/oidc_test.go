@@ -4,7 +4,26 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/skymoore/coredns-ez/admin/store"
 )
+
+func TestOIDCProvisionRole(t *testing.T) {
+	boot := store.User{Username: "admin", Role: store.RoleAdmin}
+	if got := oidcProvisionRole(true, "admin", nil); got != store.RoleAdmin {
+		t.Fatalf("empty db: %s", got)
+	}
+	if got := oidcProvisionRole(true, "admin", []store.User{boot}); got != store.RoleViewer {
+		t.Fatalf("password on with bootstrap: %s", got)
+	}
+	if got := oidcProvisionRole(false, "admin", []store.User{boot}); got != store.RoleAdmin {
+		t.Fatalf("password off leftover bootstrap: %s", got)
+	}
+	fed := store.User{Username: "i@msky.me", Role: store.RoleAdmin}
+	if got := oidcProvisionRole(false, "admin", []store.User{boot, fed}); got != store.RoleViewer {
+		t.Fatalf("password off already has oidc admin: %s", got)
+	}
+}
 
 func TestWantsJSON(t *testing.T) {
 	browser := httptest.NewRequest(http.MethodGet, "/", nil)

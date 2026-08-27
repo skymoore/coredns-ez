@@ -12,6 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 export function ZonesPage({ me }: { me: Actor }) {
   const q = useQuery({ queryKey: ["zones"], queryFn: () => api<{ zones: Zone[] }>("/zones") });
+  const zones = q.data?.zones ?? [];
   return (
     <div>
       <PageHeader
@@ -20,14 +21,14 @@ export function ZonesPage({ me }: { me: Actor }) {
         actions={hasRole(me.role, "operator") ? <CreateZone /> : null}
       />
       {q.isLoading ? <Skeleton className="h-40" /> : null}
-      {q.data && q.data.zones.length === 0 ? (
+      {q.data && zones.length === 0 ? (
         <EmptyState
           title="No zones"
           body="Create a primary origin here, or wait for cluster sync on a secondary."
           action={hasRole(me.role, "operator") ? <CreateZone /> : null}
         />
       ) : null}
-      {q.data && q.data.zones.length > 0 ? (
+      {q.data && zones.length > 0 ? (
         <div className="rounded-lg border border-border">
           <Table>
             <THead>
@@ -39,7 +40,7 @@ export function ZonesPage({ me }: { me: Actor }) {
               </TR>
             </THead>
             <TBody>
-              {q.data.zones.map((z) => (
+              {zones.map((z) => (
                 <TR key={z.origin}>
                   <TD>
                     <Link

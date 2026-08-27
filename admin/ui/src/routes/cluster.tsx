@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api";
+import { joinURL, postClusterConnect } from "@/lib/cluster-join";
 import type { Cluster, JoinToken, NodeInfo, Zone } from "@/lib/types";
 import { PageHeader } from "@/components/shell/page-header";
 import { EmptyState } from "@/components/shell/empty-state";
@@ -45,7 +46,6 @@ export function ClusterPage() {
   const [token, setToken] = useState("");
   const [dns, setDns] = useState("");
   const [nodeName, setNodeName] = useState("");
-  const [joinOpen, setJoinOpen] = useState(false);
   const [edit, setEdit] = useState<{ id: string; name: string; api_url: string; dns_addr: string } | null>(null);
   const [primaryDNS, setPrimaryDNS] = useState("");
   const [overrideDraft, setOverrideDraft] = useState("");
@@ -58,17 +58,18 @@ export function ClusterPage() {
   });
   const connect = useMutation({
     mutationFn: () =>
-      api("/cluster/connect", {
-        method: "POST",
-        body: JSON.stringify({
-          url,
-          token,
-          dns,
+      postClusterConnect(
+        (path, init) => api(path, init),
+        () => api<NodeInfo>("/node"),
+        {
+          url: joinURL(url),
+          token: token.trim(),
+          dns: dns.trim(),
           name: nodeName.trim(),
           api_url: window.location.origin,
           primary_dns: primaryDNS.trim(),
-        }),
-      }),
+        },
+      ),
     onSuccess: () => {
       toast.success("Joined. Zones are transferring from the primary.");
       qc.invalidateQueries();
@@ -204,10 +205,7 @@ export function ClusterPage() {
           className="mb-6 max-w-lg space-y-3 rounded-lg border border-border p-4"
           onSubmit={(e) => {
             e.preventDefault();
-            if (role === "primary") {
-              setJoinOpen(true);
-              return;
-            }
+            connect.reset();
             connect.mutate();
           }}
         >
@@ -266,8 +264,17 @@ export function ClusterPage() {
               Stored only on this node.
             </p>
           </div>
+          {connect.isError ? (
+            <p className="text-sm text-destructive" role="alert">
+              {connect.error instanceof ApiError
+                ? `${connect.error.status}: ${connect.error.message}`
+                : connect.error instanceof Error
+                  ? connect.error.message
+                  : "Join failed"}
+            </p>
+          ) : null}
           <Button type="submit" disabled={connect.isPending}>
-            Join cluster
+            {connect.isPending ? "Joining…" : "Join cluster"}
           </Button>
         </form>
       ) : null}
@@ -473,18 +480,6 @@ export function ClusterPage() {
           </form>
         </DialogContent>
       </Dialog>
-      <ConfirmDialog
-        open={joinOpen}
-        onOpenChange={setJoinOpen}
-        title="Join as a secondary?"
-        body="This node will stop being a cluster primary. Users and TSIG keys on this box are replaced with the other primary’s. Zone files already here are not uploaded."
-        confirmLabel="Join cluster"
-        onConfirm={() => {
-          setJoinOpen(false);
-          connect.mutate();
-        }}
-        busy={connect.isPending}
-      />
       <ConfirmDialog
         open={!!del}
         onOpenChange={(v) => !v && setDel(null)}

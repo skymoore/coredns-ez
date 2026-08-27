@@ -85,6 +85,9 @@ func TestDenyByDefaultAndLogin(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("zones with jwt: %d %s", w.Code, w.Body.Bytes())
 	}
+	if !bytes.Contains(w.Body.Bytes(), []byte(`"zones":[]`)) {
+		t.Fatalf("empty zone list must be [] not null: %s", w.Body.Bytes())
+	}
 
 	r = httptest.NewRequest(http.MethodGet, "/dns-query", nil)
 	w = httptest.NewRecorder()

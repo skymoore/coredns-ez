@@ -26,10 +26,14 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     }
   }
   if (!res.ok) {
-    const msg =
-      data && typeof data === "object" && "error" in data
-        ? String((data as { error: unknown }).error)
-        : res.statusText;
+    let msg = res.statusText || `HTTP ${res.status}`;
+    if (data && typeof data === "object" && "error" in data && (data as { error: unknown }).error) {
+      msg = String((data as { error: unknown }).error);
+    } else if (typeof data === "string" && data.trim()) {
+      msg = data.slice(0, 400);
+    } else if (!text) {
+      msg = `HTTP ${res.status} (empty response)`;
+    }
     throw new ApiError(res.status, msg);
   }
   return data as T;

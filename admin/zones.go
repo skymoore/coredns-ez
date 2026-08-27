@@ -24,7 +24,7 @@ type zoneJSON struct {
 func (a *Admin) handleListZones(w http.ResponseWriter, _ *http.Request) {
 	seen := map[string]bool{}
 	signed := a.db.DNSSECOriginSet()
-	var out []zoneJSON
+	out := []zoneJSON{}
 	rows, _ := a.db.ListZones()
 	for _, row := range rows {
 		z := zoneFromRow(row)

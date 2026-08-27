@@ -120,5 +120,5 @@ RUN apt-get update \
 
 WORKDIR /scripts
 COPY integration-test/scripts /scripts
-RUN chmod 0755 /scripts/*.sh
+RUN chmod 0755 /scripts/*.sh /scripts/*.py
 ENTRYPOINT ["/scripts/run-tests.sh"]

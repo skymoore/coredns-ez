@@ -15,6 +15,11 @@ import (
 	"github.com/skymoore/coredns-ez/internal/zonereg"
 )
 
+// testAfterConnectFlush runs after the 200 is flushed and before applySnapshot.
+// Tests close the client here to prove join still completes if TLS drops.
+var testAfterConnectFlush func()
+
+
 func (a *Admin) handleGetCluster(w http.ResponseWriter, r *http.Request) {
 	id, _ := a.db.Meta(store.MetaClusterID)
 	adv, _ := a.db.Meta(store.MetaAdvertise)
@@ -144,10 +149,16 @@ func (a *Admin) handleClusterConnect(w http.ResponseWriter, r *http.Request) {
 		APIURL     string `json:"api_url"`
 		PrimaryDNS string `json:"primary_dns"`
 	}
-	if err := readJSON(r, &body); err != nil || body.URL == "" || body.Token == "" {
+	if err := readJSON(r, &body); err != nil || strings.TrimSpace(body.Token) == "" {
 		writeError(w, http.StatusBadRequest, "url and token required")
 		return
 	}
+	joinURL, err := normalizeJoinURL(body.URL)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	body.URL = joinURL
 	name := strings.TrimSpace(body.Name)
 	if name == "" {
 		name = a.nodeName()
@@ -167,18 +178,29 @@ func (a *Admin) handleClusterConnect(w http.ResponseWriter, r *http.Request) {
 		primaryDNS = n
 	}
 	apiURL := publicAPIURL(r, body.APIURL, dnsAddr)
-	if err := a.joinPrimary(body.URL, body.Token, name, dnsAddr, apiURL, primaryDNS); err != nil {
+	log.Infof("cluster connect to %s name=%s dns=%s", body.URL, name, dnsAddr)
+	snap, err := a.acceptJoin(body.URL, body.Token, name, dnsAddr, apiURL, primaryDNS)
+	if err != nil {
+		log.Warningf("cluster connect to %s: %v", body.URL, err)
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	a.becomeSecondary()
+	a.cfg.Role = roleSecondary
+	_ = a.db.SetMeta(store.MetaRole, roleSecondary)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "joined"})
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
 	}
-	// Do not restart here: the HTTP client (and admin UI) treat a dropped
-	// connection as a failed join even after a successful snapshot apply.
+	if testAfterConnectFlush != nil {
+		testAfterConnectFlush()
+	}
+	if err := a.applySnapshot(snap); err != nil {
+		log.Warningf("cluster apply after join: %v", err)
+	}
+	// Do not restart here: the HTTP client treats a dropped connection as a
+	// failed join even after the primary already accepted this node.
 	a.pendingReload = false
+	a.startPull()
 }
 
 func (a *Admin) handleClusterJoin(w http.ResponseWriter, r *http.Request) {
@@ -642,7 +664,27 @@ func (a *Admin) pushSnapshot() {
 	// pull /cluster/snapshot every 30s.
 }
 
+func normalizeJoinURL(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	raw = strings.TrimRight(raw, "/")
+	if raw == "" {
+		return "", fmt.Errorf("url required")
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "https://" + raw
+	}
+	return raw, nil
+}
+
 func (a *Admin) joinPrimary(url, token, name, dnsAddr, apiURL, primaryDNS string) error {
+	snap, err := a.acceptJoin(url, token, name, dnsAddr, apiURL, primaryDNS)
+	if err != nil {
+		return err
+	}
+	return a.applySnapshot(snap)
+}
+
+func (a *Admin) acceptJoin(url, token, name, dnsAddr, apiURL, primaryDNS string) (store.Snapshot, error) {
 	url = strings.TrimRight(strings.TrimSpace(url), "/")
 	payload, _ := json.Marshal(map[string]string{
 		"token": token, "name": name, "api_url": apiURL, "dns_addr": dnsAddr,
@@ -657,12 +699,12 @@ func (a *Admin) joinPrimary(url, token, name, dnsAddr, apiURL, primaryDNS string
 	}
 	resp, err := client.Post(url+"/api/v1/cluster/join", "application/json", bytes.NewReader(payload))
 	if err != nil {
-		return err
+		return store.Snapshot{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("join status %d: %s", resp.StatusCode, b)
+		return store.Snapshot{}, fmt.Errorf("join status %d: %s", resp.StatusCode, b)
 	}
 	var out struct {
 		ClusterID    string         `json:"cluster_id"`
@@ -672,7 +714,7 @@ func (a *Admin) joinPrimary(url, token, name, dnsAddr, apiURL, primaryDNS string
 		Snapshot     store.Snapshot `json:"snapshot"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return err
+		return store.Snapshot{}, err
 	}
 	_ = a.db.SetMeta(store.MetaClusterID, out.ClusterID)
 	_ = a.db.SetMeta(store.MetaMemberSec, out.MemberSecret)
@@ -690,5 +732,5 @@ func (a *Admin) joinPrimary(url, token, name, dnsAddr, apiURL, primaryDNS string
 		_ = a.db.SetMeta(store.MetaPrimaryDNS, primaryDNS)
 		a.cfg.PrimaryDNS = primaryDNS
 	}
-	return a.applySnapshot(out.Snapshot)
+	return out.Snapshot, nil
 }

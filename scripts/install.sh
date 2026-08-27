@@ -40,9 +40,10 @@ detect_os() {
 		return
 	fi
 	if [ -f /etc/os-release ]; then
-		# shellcheck disable=SC1091
-		. /etc/os-release
-		case "${ID:-}" in
+		# Subshell: Debian/Ubuntu set VERSION="13 (trixie)" which must not
+		# clobber the CoreDNS release pin (VERSION=v1.14.7).
+		id=$(. /etc/os-release; printf '%s' "${ID:-}")
+		case "$id" in
 		debian | ubuntu)
 			command -v apt-get >/dev/null || die "apt-get not found"
 			OS=debian
@@ -63,8 +64,13 @@ github_curl() {
 
 resolve_version() {
 	if [ -n "${VERSION:-}" ] && [ "$VERSION" != "latest" ]; then
-		printf '%s' "$VERSION"
-		return
+		case "$VERSION" in
+		v[0-9]*)
+			printf '%s' "$VERSION"
+			return
+			;;
+		esac
+		die "VERSION must be a CoreDNS tag like v1.14.7 (got ${VERSION})"
 	fi
 	final=$(github_curl -o /dev/null -w '%{url_effective}' "https://github.com/${REPO}/releases/latest" || true)
 	tag=${final##*/}
@@ -123,9 +129,10 @@ ensure_pkgs() {
 	if want_unbound; then
 		pkgs="$pkgs unbound"
 	fi
-	DEBIAN_FRONTEND=noninteractive apt-get update -qq
+	# needrestart on Debian 13 prompts interactively during apt; suspend it.
+	DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1 apt-get update -qq
 	# shellcheck disable=SC2086
-	DEBIAN_FRONTEND=noninteractive apt-get install -y -qq $pkgs
+	DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1 apt-get install -y -qq $pkgs
 }
 
 ensure_user() {
@@ -276,10 +283,15 @@ fix_oneline_transfer() {
 
 write_corefile() {
 	corefile="${CONF_DIR}/Corefile"
-	if [ -f "$corefile" ]; then
+	# A previous run that died before the binary landed (e.g. bad VERSION)
+	# still writes Corefile. Re-seed so UNBOUND=1 is not stuck on that draft.
+	if [ -f "$corefile" ] && [ -x "${LIB_DIR}/coredns" ]; then
 		printf 'keep existing %s\n' "$corefile"
 		fix_oneline_transfer
 		return
+	fi
+	if [ -f "$corefile" ]; then
+		printf 'replacing incomplete %s (no binary yet)\n' "$corefile"
 	fi
 	if want_unbound; then
 		cat >"$corefile" <<EOF

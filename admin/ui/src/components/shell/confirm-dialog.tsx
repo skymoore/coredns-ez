@@ -9,6 +9,7 @@ export function ConfirmDialog({
   onConfirm,
   onOpenChange,
   busy,
+  error,
 }: {
   open: boolean;
   title: string;
@@ -17,16 +18,22 @@ export function ConfirmDialog({
   onConfirm: () => void;
   onOpenChange: (v: boolean) => void;
   busy?: boolean;
+  error?: string;
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent title={title}>
         <p className="mb-5 text-sm text-muted-foreground">{body}</p>
+        {error ? (
+          <p className="mb-5 text-sm text-destructive" role="alert">
+            {error}
+          </p>
+        ) : null}
         <div className="flex justify-end gap-2">
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button variant="destructive" onClick={onConfirm} disabled={busy}>
+          <Button type="button" variant="destructive" onClick={onConfirm} disabled={busy}>
             {confirmLabel}
           </Button>
         </div>
