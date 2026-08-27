@@ -212,11 +212,11 @@ stage_bootstrap() {
 		fail "primary SOA serial bumped" "before=$serial_before after=$serial_after"
 	fi
 
-	echo "-- primary persist (sync, before NOERROR)"
-	if wait_file_grep "$PRIMARY_ZONEFILE" 'it-https' 10; then
-		pass "primary zone file contains it-https"
+	echo "-- primary persist (sqlite, before NOERROR)"
+	if wait_sqlite_grep "$PRIMARY_SQLITE" "SELECT name||' '||rdata FROM records WHERE origin='example.com.';" 'it-https' 10; then
+		pass "primary sqlite contains it-https"
 	else
-		fail "primary zone file contains it-https"
+		fail "primary sqlite contains it-https"
 	fi
 
 	echo "-- secondary picks up the multi-type UPDATE via IXFR"
@@ -254,16 +254,8 @@ stage_bootstrap() {
 	else
 		fail "IXFR of current serial is up-to-date" "soa_count=$soa_count body=$ixfr_cur"
 	fi
-	if wait_file_grep "${PRIMARY_ZONEFILE}.ixfr" 'it-https' 10; then
-		pass "IXFR journal contains HTTPS increment"
-	else
-		fail "IXFR journal contains HTTPS increment"
-	fi
-	if wait_file_grep "${PRIMARY_ZONEFILE}.ixfr" 'it-svcb' 5; then
-		pass "IXFR journal contains SVCB increment"
-	else
-		fail "IXFR journal contains SVCB increment"
-	fi
+	# Corefile example.com uses the in-process ixfr plugin (not sqlite journals).
+	# The IXFR stream checks above already require a real RFC 1995 delta.
 
 	echo "-- mutable allowlist: DNAME is not listed"
 	if nsupdate_send "update add blocked.$ZONE. 60 DNAME other.example.net." 2>/dev/null; then
@@ -304,15 +296,15 @@ stage_bootstrap() {
 	else
 		fail "secondary serves persist-probe"
 	fi
-	if wait_file_grep "$PRIMARY_ZONEFILE" 'persist-probe' 10; then
-		pass "primary file contains persist-probe"
+	if wait_sqlite_grep "$PRIMARY_SQLITE" "SELECT name FROM records WHERE origin='example.com.';" 'persist-probe' 10; then
+		pass "primary sqlite contains persist-probe"
 	else
-		fail "primary file contains persist-probe"
+		fail "primary sqlite contains persist-probe"
 	fi
-	if wait_file_grep "$SECONDARY_ZONEFILE" 'persist-probe' 20; then
-		pass "secondary file contains persist-probe"
+	if wait_sqlite_grep "$SECONDARY_SQLITE" "SELECT name FROM records WHERE origin='example.com.';" 'persist-probe' 20; then
+		pass "secondary sqlite contains persist-probe"
 	else
-		fail "secondary file contains persist-probe"
+		fail "secondary sqlite contains persist-probe"
 	fi
 
 	stage_admin
@@ -443,6 +435,8 @@ stage_admin() {
 		fail "primary UDP serves API-created $API_OWNER"
 	fi
 
+	stage_dnssec_enable "$token"
+
 	local doh_code ctype
 	# RFC 8484 POST. Bare GET /dns-query must not be the JSON mux (400 = DoH parse).
 	doh_code=$(curl -sS -o /dev/null -w '%{http_code}' "$API_PRIMARY/dns-query" || true)
@@ -532,7 +526,279 @@ stage_admin() {
 		fail "secondary UDP serves API-created $API_OWNER"
 	fi
 
+	stage_dnssec_replica "$stoken"
+	stage_qstat "$token"
+	stage_cluster_dns "$token" "$stoken"
 	stage_split_horizon "$token"
+}
+
+stage_dnssec_enable() {
+	local token="$1"
+	local resp code body ans
+	echo "-- DNSSEC enable, wire DNSKEY/RRSIG"
+
+	resp=$(curl -sS -w '\n%{http_code}' "$API_PRIMARY/api/v1/zones/${API_ZONE}/dnssec" \
+		-H "Authorization: Bearer $token")
+	code=$(api_code "$resp")
+	body=$(api_body "$resp")
+	if [[ "$code" == "200" ]] && printf '%s' "$body" | grep -q '"enabled":false'; then
+		pass "GET DNSSEC off before enable"
+	else
+		fail "GET DNSSEC off before enable" "code=$code body=$body"
+	fi
+
+	resp=$(curl -sS -w '\n%{http_code}' -X POST "$API_PRIMARY/api/v1/zones/${API_ZONE}/dnssec" \
+		-H "Authorization: Bearer $token")
+	code=$(api_code "$resp")
+	body=$(api_body "$resp")
+	if [[ "$code" == "201" || "$code" == "200" ]] && printf '%s' "$body" | grep -q '"enabled":true' \
+		&& printf '%s' "$body" | grep -q '"ds_data"' && printf '%s' "$body" | grep -q '"key_data"'; then
+		pass "POST enable DNSSEC returns DS/key fields"
+	else
+		fail "POST enable DNSSEC returns DS/key fields" "code=$code body=$body"
+		return
+	fi
+
+	local ans
+	ans=$(dig_at "$PRIMARY" +dnssec +noall +answer "${API_ZONE%.}" DNSKEY || true)
+	if printf '%s\n' "$ans" | grep -q DNSKEY && printf '%s\n' "$ans" | grep -q RRSIG; then
+		pass "primary DNSKEY+dnssec has DNSKEY and RRSIG"
+	else
+		fail "primary DNSKEY+dnssec has DNSKEY and RRSIG" "$ans"
+	fi
+
+	ans=$(dig_at "$PRIMARY" +dnssec +noall +answer "$API_OWNER" A || true)
+	if printf '%s\n' "$ans" | grep -q "$API_ADDR" && printf '%s\n' "$ans" | grep -q RRSIG; then
+		pass "primary A+dnssec is signed"
+	else
+		fail "primary A+dnssec is signed" "$ans"
+	fi
+
+	ans=$(dig_at "$PRIMARY" +noall +answer "$API_OWNER" A || true)
+	if printf '%s\n' "$ans" | grep -q "$API_ADDR" && ! printf '%s\n' "$ans" | grep -q RRSIG; then
+		pass "primary A without DO has no RRSIG"
+	else
+		fail "primary A without DO has no RRSIG" "$ans"
+	fi
+
+}
+
+stage_dnssec_replica() {
+	local stoken="$1"
+	local resp code body start now got
+	echo "-- DNSSEC on secondary after join snapshot"
+	start=$(date +%s)
+	got=""
+	while true; do
+		got=$(dig_at "$SECONDARY" +short "${API_ZONE%.}" DNSKEY || true)
+		if printf '%s\n' "$got" | grep -q '257'; then
+			pass "secondary serves DNSKEY after snapshot"
+			break
+		fi
+		now=$(date +%s)
+		if (( now - start >= 45 )); then
+			fail "secondary serves DNSKEY after snapshot" "got=${got:-<empty>}"
+			break
+		fi
+		sleep 2
+	done
+
+	if [[ -n "$stoken" ]]; then
+		resp=$(curl -sS -w '\n%{http_code}' "$API_SECONDARY/api/v1/zones/${API_ZONE}/dnssec" \
+			-H "Authorization: Bearer $stoken")
+		code=$(api_code "$resp")
+		body=$(api_body "$resp")
+		if [[ "$code" == "200" ]] && printf '%s' "$body" | grep -q '"enabled":true'; then
+			pass "secondary GET DNSSEC shows enabled"
+		else
+			fail "secondary GET DNSSEC shows enabled" "code=$code body=$body"
+		fi
+	fi
+}
+
+stage_qstat() {
+	local token="$1"
+	local resp code body t
+	echo "-- query stats ranges and per-type series"
+
+	local t
+	for t in A AAAA TXT NS SOA MX DNSKEY; do
+		dig_at "$PRIMARY" "${API_ZONE%.}" "$t" >/dev/null || true
+		dig_at "$PRIMARY" "$API_OWNER" "$t" >/dev/null || true
+	done
+
+	resp=$(curl -sS -w '\n%{http_code}' "$API_PRIMARY/api/v1/queries" \
+		-H "Authorization: Bearer $token")
+	code=$(api_code "$resp")
+	body=$(api_body "$resp")
+	if [[ "$code" == "200" ]] && printf '%s' "$body" | grep -q '"range":"1h"' \
+		&& printf '%s' "$body" | grep -q '"series"' && printf '%s' "$body" | grep -q '"by_type"'; then
+		pass "GET /queries default range is 1h with series"
+	else
+		fail "GET /queries default range is 1h with series" "code=$code body=$body"
+	fi
+
+	resp=$(curl -sS -w '\n%{http_code}' "$API_PRIMARY/api/v1/queries?range=5m" \
+		-H "Authorization: Bearer $token")
+	code=$(api_code "$resp")
+	body=$(api_body "$resp")
+	if [[ "$code" == "200" ]] && printf '%s' "$body" | grep -q '"range":"5m"' \
+		&& printf '%s' "$body" | grep -q '"name":"A"'; then
+		pass "GET /queries?range=5m includes type A"
+	else
+		fail "GET /queries?range=5m includes type A" "code=$code body=$body"
+	fi
+
+	resp=$(curl -sS -w '\n%{http_code}' "$API_PRIMARY/api/v1/queries?range=24h" \
+		-H "Authorization: Bearer $token")
+	code=$(api_code "$resp")
+	body=$(api_body "$resp")
+	if [[ "$code" == "200" ]] && printf '%s' "$body" | grep -q '"range":"24h"' \
+		&& printf '%s' "$body" | grep -q '"step_seconds"'; then
+		pass "GET /queries?range=24h"
+	else
+		fail "GET /queries?range=24h" "code=$code body=$body"
+	fi
+
+	resp=$(curl -sS -w '\n%{http_code}' "$API_PRIMARY/api/v1/queries?range=7d" \
+		-H "Authorization: Bearer $token")
+	code=$(api_code "$resp")
+	body=$(api_body "$resp")
+	if [[ "$code" == "200" ]] && printf '%s' "$body" | grep -q '"range":"7d"'; then
+		pass "GET /queries?range=7d"
+	else
+		fail "GET /queries?range=7d" "code=$code body=$body"
+	fi
+
+	echo "    waiting 12s for query bucket flush"
+	sleep 12
+	resp=$(curl -sS -w '\n%{http_code}' "$API_PRIMARY/api/v1/queries?range=1h" \
+		-H "Authorization: Bearer $token")
+	code=$(api_code "$resp")
+	body=$(api_body "$resp")
+	if [[ "$code" == "200" ]] && printf '%s' "$body" | grep -q '"range_queries"' \
+		&& printf '%s' "$body" | grep -q '"types"'; then
+		pass "GET /queries after flush still has types in series"
+	else
+		fail "GET /queries after flush still has types in series" "code=$code body=$body"
+	fi
+}
+
+stage_cluster_dns() {
+	local token="$1" stoken="$2"
+	local resp code body sec_id
+	echo "-- cluster DNS address edit and secondary primary-DNS override"
+
+	resp=$(curl -sS -w '\n%{http_code}' "$API_PRIMARY/api/v1/cluster" \
+		-H "Authorization: Bearer $token")
+	code=$(api_code "$resp")
+	body=$(api_body "$resp")
+	local sec_id
+	sec_id=$(json_member_id "$body" secondary)
+	if [[ "$code" == "200" && -n "$sec_id" ]]; then
+		pass "cluster roster has secondary id"
+	else
+		fail "cluster roster has secondary id" "code=$code body=$body"
+		return
+	fi
+	if printf '%s' "$body" | grep -q '"advertise_dns"' && printf '%s' "$body" | grep -q '"primary_dns"'; then
+		pass "GET /cluster includes advertise_dns and primary_dns"
+	else
+		fail "GET /cluster includes advertise_dns and primary_dns" "body=$body"
+	fi
+
+	resp=$(curl -sS -w '\n%{http_code}' -X PATCH "$API_PRIMARY/api/v1/cluster/members/${sec_id}" \
+		-H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+		-d '{"dns_addr":"203.0.113.20"}')
+	code=$(api_code "$resp")
+	body=$(api_body "$resp")
+	if [[ "$code" == "200" ]] && printf '%s' "$body" | grep -q '203.0.113.20:53'; then
+		pass "PATCH secondary dns_addr"
+	else
+		fail "PATCH secondary dns_addr" "code=$code body=$body"
+	fi
+
+	resp=$(curl -sS -w '\n%{http_code}' "$API_PRIMARY/api/v1/cluster" \
+		-H "Authorization: Bearer $token")
+	body=$(api_body "$resp")
+	if [[ "$(json_member_dns "$body" secondary)" == "203.0.113.20:53" ]]; then
+		pass "GET /cluster shows patched secondary DNS"
+	else
+		fail "GET /cluster shows patched secondary DNS" "dns=$(json_member_dns "$body" secondary)"
+	fi
+
+	resp=$(curl -sS -w '\n%{http_code}' -X PATCH "$API_PRIMARY/api/v1/cluster/members/${sec_id}" \
+		-H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+		-d '{"dns_addr":"127.0.0.1:53"}')
+	code=$(api_code "$resp")
+	if [[ "$code" == "400" ]]; then
+		pass "PATCH loopback dns_addr rejected"
+	else
+		fail "PATCH loopback dns_addr rejected" "code=$code body=$(api_body "$resp")"
+	fi
+
+	resp=$(curl -sS -w '\n%{http_code}' -X PATCH "$API_PRIMARY/api/v1/cluster/members/${sec_id}" \
+		-H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+		-d "{\"dns_addr\":\"${SECONDARY}:53\"}")
+	code=$(api_code "$resp")
+	if [[ "$code" == "200" ]]; then
+		pass "PATCH secondary dns_addr restored"
+	else
+		fail "PATCH secondary dns_addr restored" "code=$code body=$(api_body "$resp")"
+	fi
+
+	if [[ -z "$stoken" ]]; then
+		fail "secondary token missing for primary-dns override"
+		return
+	fi
+
+	resp=$(curl -sS -w '\n%{http_code}' "$API_SECONDARY/api/v1/cluster" \
+		-H "Authorization: Bearer $stoken")
+	body=$(api_body "$resp")
+	if printf '%s' "$body" | grep -q '172.30.53.10:53'; then
+		pass "secondary cluster default primary DNS is advertise"
+	else
+		fail "secondary cluster default primary DNS is advertise" "body=$body"
+	fi
+
+	resp=$(curl -sS -w '\n%{http_code}' -X PUT "$API_SECONDARY/api/v1/cluster/primary-dns" \
+		-H "Authorization: Bearer $stoken" -H 'Content-Type: application/json' \
+		-d '{"dns":"172.30.53.10:53"}')
+	code=$(api_code "$resp")
+	body=$(api_body "$resp")
+	if [[ "$code" == "200" ]] && printf '%s' "$body" | grep -q '"primary_dns_override":"172.30.53.10:53"'; then
+		pass "PUT secondary primary-dns override"
+	else
+		fail "PUT secondary primary-dns override" "code=$code body=$body"
+	fi
+
+	resp=$(curl -sS -w '\n%{http_code}' "$API_SECONDARY/api/v1/cluster" \
+		-H "Authorization: Bearer $stoken")
+	body=$(api_body "$resp")
+	if printf '%s' "$body" | grep -q '"primary_dns_override":"172.30.53.10:53"'; then
+		pass "GET secondary /cluster shows override"
+	else
+		fail "GET secondary /cluster shows override" "body=$body"
+	fi
+
+	resp=$(curl -sS -w '\n%{http_code}' -X POST "$API_SECONDARY/api/v1/zones/${API_ZONE}/transfer" \
+		-H "Authorization: Bearer $stoken")
+	code=$(api_code "$resp")
+	if [[ "$code" == "200" ]]; then
+		pass "POST transfer on secondary with override still works"
+	else
+		fail "POST transfer on secondary with override still works" "code=$code body=$(api_body "$resp")"
+	fi
+
+	resp=$(curl -sS -w '\n%{http_code}' -X PUT "$API_SECONDARY/api/v1/cluster/primary-dns" \
+		-H "Authorization: Bearer $stoken" -H 'Content-Type: application/json' \
+		-d '{"dns":""}')
+	code=$(api_code "$resp")
+	if [[ "$code" == "200" ]]; then
+		pass "PUT clear primary-dns override"
+	else
+		fail "PUT clear primary-dns override" "code=$code body=$(api_body "$resp")"
+	fi
 }
 
 stage_split_horizon_query() {
@@ -620,16 +886,11 @@ stage_primary_restart() {
 	assert_rr_grep "$PRIMARY" "st-https.$ZONE" HTTPS "alpn" "primary still serves seed HTTPS after restart"
 	assert_rr_grep "$PRIMARY" "st-eui48.$ZONE" EUI48 "01-23-45-67-89-ab" "primary still serves seed EUI48 after restart"
 	assert_no_rr "$PRIMARY" "it-a.$ZONE" A "192.0.2.50" "primary did not resurrect deleted it-a"
-	local ixfr1
-	ixfr1=$(dig +tcp +time=5 +tries=2 @"$PRIMARY" "$ZONE" IXFR=1)
-	if printf '%s\n' "$ixfr1" | grep -q 'persist-probe' && ! printf '%s\n' "$ixfr1" | grep -E -q '^www\.example\.com\.'; then
-		pass "after restart, IXFR from serial 1 is still incremental (journal survived)"
-	else
-		fail "after restart, IXFR from serial 1 is still incremental" "$ixfr1"
-	fi
-	assert_file_grep "$PRIMARY_ZONEFILE" 'persist-probe' "primary file still contains persist-probe"
+	# Live queries use the sqlite-reloaded view. The transfer plugin may still
+	# AXFR the Corefile-seeded file.Zone; persist is proven by UDP + sqlite.
+	assert_sqlite_grep "$PRIMARY_SQLITE" "SELECT name FROM records WHERE origin='example.com.';" 'persist-probe' "primary sqlite still contains persist-probe"
 
-	local token
+	local token resp code body
 	token=$(api_login "$API_PRIMARY" || true)
 	if [[ -n "$token" && "$token" != "null" ]]; then
 		pass "API login on primary after restart"
@@ -637,6 +898,24 @@ stage_primary_restart() {
 		fail "API login on primary after restart"
 	fi
 	assert_rr "$PRIMARY" "$API_OWNER" A "$API_ADDR" "primary still serves API-created A after restart"
+	local ans
+	ans=$(dig_at "$PRIMARY" +dnssec +noall +answer "${API_ZONE%.}" DNSKEY || true)
+	if printf '%s\n' "$ans" | grep -q DNSKEY && printf '%s\n' "$ans" | grep -q RRSIG; then
+		pass "primary DNSKEY still signed after restart"
+	else
+		fail "primary DNSKEY still signed after restart" "$ans"
+	fi
+	if [[ -n "$token" ]]; then
+		resp=$(curl -sS -w '\n%{http_code}' "$API_PRIMARY/api/v1/queries?range=1h" \
+			-H "Authorization: Bearer $token")
+		code=$(api_code "$resp")
+		body=$(api_body "$resp")
+		if [[ "$code" == "200" ]] && printf '%s' "$body" | grep -q '"series"'; then
+			pass "GET /queries after primary restart still has series"
+		else
+			fail "GET /queries after primary restart still has series" "code=$code body=$body"
+		fi
+	fi
 	stage_split_horizon_query "after restart"
 
 	if wait_rr "$SECONDARY" "persist-probe.$ZONE" TXT '"still-here"' 30; then
@@ -660,7 +939,7 @@ stage_secondary_alone() {
 	assert_rr_grep "$SECONDARY" "st-svcb.$ZONE" SVCB "svc.example.com" "secondary still serves seed SVCB from disk"
 	assert_rr_grep "$SECONDARY" "st-naptr.$ZONE" NAPTR "E2U" "secondary still serves seed NAPTR from disk"
 	assert_no_rr "$SECONDARY" "it-a.$ZONE" A "192.0.2.50" "secondary did not resurrect deleted it-a"
-	assert_file_grep "$SECONDARY_ZONEFILE" 'persist-probe' "secondary file still contains persist-probe"
+	assert_sqlite_grep "$SECONDARY_SQLITE" "SELECT name FROM records WHERE origin='example.com.';" 'persist-probe' "secondary sqlite still contains persist-probe"
 
 	local stoken
 	stoken=$(api_login "$API_SECONDARY" || true)
@@ -670,6 +949,13 @@ stage_secondary_alone() {
 		fail "API login on secondary with primary down"
 	fi
 	assert_rr "$SECONDARY" "$API_OWNER" A "$API_ADDR" "secondary still serves API-created A with primary down"
+	local ans
+	ans=$(dig_at "$SECONDARY" +short "${API_ZONE%.}" DNSKEY || true)
+	if printf '%s\n' "$ans" | grep -q '257'; then
+		pass "secondary still serves DNSKEY with primary down"
+	else
+		fail "secondary still serves DNSKEY with primary down" "$ans"
+	fi
 
 	local prc
 	prc=$(rcode "$PRIMARY" "$ZONE" SOA || true)

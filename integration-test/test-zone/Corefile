@@ -7,6 +7,7 @@
 # the scrape listener (shared across blocks).
 https://.:8443 {
 	prometheus :9153
+	qstat
 	errors
 	log
 	admin {
@@ -23,6 +24,7 @@ https://.:8443 {
 
 . {
 	prometheus :9153
+	qstat
 	admin
 	transfer {
 		to 172.30.53.20 172.30.53.30
@@ -44,6 +46,7 @@ example.com {
 
 	# Singleton overlay: ACL views for this Corefile primary, then Next to
 	# dns-update-persistent for the public zonefile. Admin does not own example.com.
+	qstat
 	admin
 
 	dns-update-persistent {

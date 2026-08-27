@@ -41,6 +41,20 @@ func ReadZoneFile(path, origin string) ([]dns.RR, error) {
 // SetPersist installs the SQLite (or test) persist backend. Required for mutations.
 func (d *UpdatePersist) SetPersist(fn PersistFunc) { d.persistFn = fn }
 
+// ReplaceRecords swaps the in-memory zone for rrs (startup reload from sqlite).
+func (d *UpdatePersist) ReplaceRecords(rrs []dns.RR) error {
+	if soaOf(rrs) == nil {
+		return fmt.Errorf("%s has no SOA", d.Zone)
+	}
+	copies := make([]dns.RR, len(rrs))
+	for i, rr := range rrs {
+		copies[i] = dns.Copy(rr)
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.swap(copies)
+}
+
 // AttachIXFR registers the journal and makes this plugin's Transfer defer to it.
 func (d *UpdatePersist) AttachIXFR(x *ixfr.IXFR) error {
 	d.ixfr = x

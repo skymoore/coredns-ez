@@ -1,5 +1,6 @@
 https://.:8443 {
 	prometheus :9153
+	qstat
 	errors
 	log
 	admin {
@@ -12,6 +13,7 @@ https://.:8443 {
 
 . {
 	prometheus :9153
+	qstat
 	admin
 }
 

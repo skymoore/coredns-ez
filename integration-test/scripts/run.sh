@@ -25,7 +25,8 @@ plugins_ok() {
 	printf '%s\n' "$out" | grep -q 'dns-update-persistent' \
 		&& printf '%s\n' "$out" | grep -q 'ixfr' \
 		&& printf '%s\n' "$out" | grep -q 'secondary-persistent' \
-		&& printf '%s\n' "$out" | grep -q '\badmin\b'
+		&& printf '%s\n' "$out" | grep -q '\badmin\b' \
+		&& printf '%s\n' "$out" | grep -q '\bqstat\b'
 }
 
 wait_healthy() {
@@ -54,9 +55,9 @@ cmd_up() {
 	wait_healthy secondary
 	echo "==> compiled plugins"
 	if plugins_ok; then
-		echo "ok  - dns-update-persistent, ixfr, admin, and secondary-persistent are compiled in"
+		echo "ok  - dns-update-persistent, ixfr, admin, qstat, and secondary-persistent are compiled in"
 	else
-		echo "not ok - expected dns-update-persistent, ixfr, admin, and secondary-persistent in \`coredns -plugins\`" >&2
+		echo "not ok - expected dns-update-persistent, ixfr, admin, qstat, and secondary-persistent in \`coredns -plugins\`" >&2
 		return 1
 	fi
 }

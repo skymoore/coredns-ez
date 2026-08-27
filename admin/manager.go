@@ -33,6 +33,13 @@ func (z sqliteZones) Remove(origin string) error {
 	return z.db.DeleteRecords(origin, "")
 }
 
+func (a *Admin) bindSQLiteSecondaries() {
+	zs := sqliteZones{db: a.db}
+	for _, s := range secondarypersist.Engines() {
+		s.SetRecordStore(zs)
+	}
+}
+
 func (a *Admin) persistPublic(origin string) dnsupdatepersist.PersistFunc {
 	return func(rrs []dns.RR) error { return a.db.ReplaceRecords(origin, "", rrs) }
 }
@@ -242,6 +249,11 @@ func (a *Admin) loadPersistedZones() error {
 			if existing := zonereg.PrimaryOf(z.Origin); existing != nil {
 				if d, ok := existing.(*dnsupdatepersist.UpdatePersist); ok {
 					d.SetPersist(a.persistPublic(z.Origin))
+					if rrs, err := a.loadZoneRRs(z.Origin, ""); err != nil {
+						log.Warningf("reload sqlite %s: %v", z.Origin, err)
+					} else if err := d.ReplaceRecords(rrs); err != nil {
+						log.Warningf("reload sqlite %s: %v", z.Origin, err)
+					}
 					a.mu.Lock()
 					a.primaries[z.Origin] = d
 					a.mu.Unlock()

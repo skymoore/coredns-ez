@@ -64,6 +64,9 @@ RUN sed -i \
     -e '/^ixfr:/a admin:github.com/skymoore/coredns-ez/admin' \
     plugin.cfg \
     && sed -i \
+    -e '/^transfer:transfer$/a qstat:github.com/skymoore/coredns-ez/admin' \
+    plugin.cfg \
+    && sed -i \
     -e '/^secondary:secondary$/a secondary-persistent:github.com/skymoore/coredns-ez/secondary-persistent' \
     plugin.cfg \
     && git apply /plugins/patches/coredns-http-handler.patch \
@@ -111,6 +114,8 @@ RUN apt-get update \
         gawk \
         coreutils \
         iproute2 \
+        python3 \
+        sqlite3 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /scripts

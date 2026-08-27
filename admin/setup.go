@@ -65,6 +65,7 @@ func setup(c *caddy.Controller) error {
 		if err := a.importCorefileZones(); err != nil {
 			log.Warningf("zonefile import: %v", err)
 		}
+		a.bindSQLiteSecondaries()
 		return a.loadPersistedZones()
 	})
 	c.OnShutdown(func() error {

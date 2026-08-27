@@ -3,6 +3,7 @@ package secondarypersist
 import (
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/coredns/coredns/plugin"
 	"github.com/coredns/coredns/plugin/file"
@@ -14,6 +15,26 @@ import (
 )
 
 const adminCatalog = "admin"
+
+var (
+	engineMu sync.Mutex
+	engines  []*SecondaryPersist
+)
+
+func registerEngine(s *SecondaryPersist) {
+	engineMu.Lock()
+	engines = append(engines, s)
+	engineMu.Unlock()
+}
+
+// Engines returns every secondary-persistent instance in this process.
+func Engines() []*SecondaryPersist {
+	engineMu.Lock()
+	defer engineMu.Unlock()
+	out := make([]*SecondaryPersist, len(engines))
+	copy(out, engines)
+	return out
+}
 
 // NewEngine returns an empty secondary that persists transferred zones to
 // RecordStore (SQLite when used with admin).
@@ -33,7 +54,12 @@ func (s *SecondaryPersist) SetNext(next plugin.Handler) { s.Next = next }
 func (s *SecondaryPersist) SetTransfer(x *transfer.Transfer) { s.Xfer = x }
 
 // SetRecordStore persists transferred zones to SQLite instead of files.
-func (s *SecondaryPersist) SetRecordStore(rs RecordStore) { s.records = rs }
+func (s *SecondaryPersist) SetRecordStore(rs RecordStore) {
+	s.records = rs
+	for _, origin := range s.Origins() {
+		s.ReloadFromStore(origin)
+	}
+}
 
 // StartOrigin begins transferring origin from the given masters.
 func (s *SecondaryPersist) StartOrigin(origin string, from []string, x *transfer.Transfer) error {

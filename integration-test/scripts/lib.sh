@@ -9,6 +9,8 @@ SECONDARY="${SECONDARY:-172.30.53.20}"
 ZONE="${ZONE:-example.com}"
 PRIMARY_ZONEFILE="${PRIMARY_ZONEFILE:-/primary-data/db.example.com}"
 SECONDARY_ZONEFILE="${SECONDARY_ZONEFILE:-/secondary-data/db.example.com}"
+PRIMARY_SQLITE="${PRIMARY_SQLITE:-/primary-data/admin.sqlite}"
+SECONDARY_SQLITE="${SECONDARY_SQLITE:-/secondary-data/admin.sqlite}"
 TSIG_NAME="${TSIG_NAME:-updater.example.com.}"
 TSIG_SECRET="${TSIG_SECRET:-Y29yZWRucy1pbnRlZ3JhdGlvbi10ZXN0LWtleSEh}"
 TSIG_ALG="${TSIG_ALG:-hmac-sha256}"
@@ -135,6 +137,36 @@ wait_file_grep() {
 		fi
 		sleep 1
 	done
+}
+
+wait_sqlite_grep() {
+	local db="$1" sql="$2" pattern="$3" timeout="${4:-20}"
+	local start now got
+	start=$(date +%s)
+	while true; do
+		if [[ -f "$db" ]]; then
+			got=$(sqlite3 "$db" "$sql" 2>/dev/null || true)
+			if printf '%s\n' "$got" | grep -E -q -- "$pattern"; then
+				return 0
+			fi
+		fi
+		now=$(date +%s)
+		if (( now - start >= timeout )); then
+			return 1
+		fi
+		sleep 1
+	done
+}
+
+assert_sqlite_grep() {
+	local db="$1" sql="$2" pattern="$3" label="$4"
+	local got
+	got=$(sqlite3 "$db" "$sql" 2>/dev/null || true)
+	if printf '%s\n' "$got" | grep -E -q -- "$pattern"; then
+		pass "$label"
+	else
+		fail "$label" "pattern /$pattern/ not in sqlite: ${got:-<empty>}"
+	fi
 }
 
 wait_file_not_grep() {
@@ -327,6 +359,30 @@ api_body() {
 json_str() {
 	local json="$1" key="$2"
 	printf '%s' "$json" | sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p" | head -n1
+}
+
+json_member_id() {
+	local json="$1" role="$2"
+	python3 -c 'import json,sys
+d=json.loads(sys.argv[1])
+role=sys.argv[2]
+for m in d.get("members") or []:
+    if m.get("role")==role:
+        print(m.get("id") or "")
+        break
+' "$json" "$role"
+}
+
+json_member_dns() {
+	local json="$1" role="$2"
+	python3 -c 'import json,sys
+d=json.loads(sys.argv[1])
+role=sys.argv[2]
+for m in d.get("members") or []:
+    if m.get("role")==role:
+        print(m.get("dns_addr") or "")
+        break
+' "$json" "$role"
 }
 
 api_login() {

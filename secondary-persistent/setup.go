@@ -146,6 +146,7 @@ func newSecondaryPersist(zones file.Zones, f fall.F, catalogZones map[string]plu
 	s.TransferInFunc = func(z *file.Zone, t *transfer.Transfer) error {
 		return s.transferIn(s.zoneName(z), z, t)
 	}
+	registerEngine(s)
 	return s
 }
 
