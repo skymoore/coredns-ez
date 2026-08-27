@@ -1,0 +1,6 @@
+**/.DS_Store
+deploy
+README.md
+Makefile
+kustomization.yaml
+src/**/*_test.go

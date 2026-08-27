@@ -1,4 +1,7 @@
-.PHONY: ui test docker
+.PHONY: ui test docker webhook
+
+webhook:
+	$(MAKE) -C webhook test
 
 ui:
 	npm --prefix admin/ui ci

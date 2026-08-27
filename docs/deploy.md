@@ -149,6 +149,20 @@ A new CoreDNS minor is released only if `patches/coredns-http-handler.patch`
 applies. linux/mips and linux/mips64le are omitted (`modernc.org/sqlite`). Do
 not point a new binary at a `db`/`data` pair from a different node.
 
+## DNS-01 (cert-manager)
+
+A scratch webhook presents ACME TXT records through the admin API. Deploy
+from this repo:
+
+```
+docker build -t ghcr.io/skymoore/coredns-ez-webhook:latest webhook
+kubectl apply -k webhook/deploy
+```
+
+Mint an operator API token in the UI, put it in Secret `coredns-api-token`
+key `token` in `cert-manager`, then `kubectl apply -k webhook/deploy/examples`.
+ClusterIssuer name is `coredns`. Details: [webhook/README.md](../webhook/README.md).
+
 ## AXFR
 
 `transfer { to 127.0.0.1 }` is in the default Corefile so the plugin exists.

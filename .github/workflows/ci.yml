@@ -28,6 +28,10 @@ jobs:
       - name: Go test
         run: go test ./...
 
+      - name: Webhook test
+        working-directory: webhook/src
+        run: go test ./...
+
       - name: Set up Node
         uses: actions/setup-node@v6
         with:

@@ -1,0 +1,17 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: test-cert-coredns
+  namespace: default
+spec:
+  secretName: test-cert-tls-coredns
+  privateKey:
+    rotationPolicy: Always
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: coredns
+    kind: ClusterIssuer
+  commonName: test-coredns.rwx.dev
+  dnsNames:
+    - test-coredns.rwx.dev

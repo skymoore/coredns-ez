@@ -55,7 +55,9 @@ docker compose -f docker-compose.cluster.yml up --build
 COREDNS_JOIN_TOKEN=... docker compose -f docker-compose.cluster.yml --profile cluster up -d
 ```
 
-The Release workflow builds the SPA, publishes binaries, runs the Docker integration suite, and pushes `linux/amd64` + `linux/arm64` images to GHCR. After the first image push, set the GHCR package to **public**.
+cert-manager DNS-01: scratch webhook in [`webhook/`](webhook/) (`src/` + `deploy/`). `kubectl apply -k webhook/deploy`, then ClusterIssuer `coredns` from `webhook/deploy/examples`.
+
+The Release workflow builds the SPA, publishes binaries, runs the Docker integration suite, and pushes `linux/amd64` + `linux/arm64` images to GHCR (CoreDNS and the webhook). After the first image push, set the GHCR package to **public**.
 
 ## admin
 

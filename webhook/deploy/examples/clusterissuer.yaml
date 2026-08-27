@@ -1,0 +1,21 @@
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: coredns
+spec:
+  acme:
+    email: i@msky.me
+    server: https://acme-v02.api.letsencrypt.org/directory
+    privateKeySecretRef:
+      name: coredns-issuer-key
+    solvers:
+      - dns01:
+          webhook:
+            groupName: acme.rwx.dev
+            solverName: coredns
+            config:
+              serverUrl: http://192.168.8.53:8080
+              ttl: 60
+              tokenSecretRef:
+                name: coredns-api-token
+                key: token

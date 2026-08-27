@@ -1,0 +1,53 @@
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: coredns-webhook-selfsign
+  namespace: cert-manager
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: coredns-webhook-ca
+  namespace: cert-manager
+spec:
+  isCA: true
+  commonName: ca.coredns-webhook.cert-manager
+  secretName: coredns-webhook-ca
+  duration: 43800h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: coredns-webhook-selfsign
+    kind: Issuer
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: coredns-webhook-ca
+  namespace: cert-manager
+spec:
+  ca:
+    secretName: coredns-webhook-ca
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: coredns-webhook-tls
+  namespace: cert-manager
+spec:
+  secretName: coredns-webhook-tls
+  duration: 8760h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: coredns-webhook-ca
+    kind: Issuer
+  dnsNames:
+    - coredns-webhook
+    - coredns-webhook.cert-manager
+    - coredns-webhook.cert-manager.svc
+    - coredns-webhook.cert-manager.svc.cluster.local
