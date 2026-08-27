@@ -60,6 +60,9 @@ RUN sed -i \
     -e '/^ixfr:/a admin:github.com/skymoore/coredns-ez/admin' \
     plugin.cfg \
     && sed -i \
+    -e '/^transfer:transfer$/a qstat:github.com/skymoore/coredns-ez/admin' \
+    plugin.cfg \
+    && sed -i \
     -e '/^secondary:secondary$/a secondary-persistent:github.com/skymoore/coredns-ez/secondary-persistent' \
     plugin.cfg \
     && git apply /plugins/patches/coredns-http-handler.patch \
@@ -75,20 +78,29 @@ RUN --mount=type=cache,target=/go/pkg/mod \
         -o /out/coredns .
 
 # -----------------------------------------------------------------------------
-# Slim runtime.
+# Slim runtime. Non-root (coredns:65532). Port 53 via file cap; if bind
+# fails, add --sysctl net.ipv4.ip_unprivileged_port_start=0.
 # -----------------------------------------------------------------------------
 FROM ${ALPINE_IMAGE}
-RUN apk add --no-cache ca-certificates tzdata \
-    && mkdir -p /var/lib/coredns/zones /etc/coredns
+RUN apk add --no-cache ca-certificates tzdata libcap-utils su-exec \
+    && addgroup -S -g 65532 coredns \
+    && adduser -S -D -H -u 65532 -G coredns -s /sbin/nologin coredns \
+    && mkdir -p /var/lib/coredns/zones /etc/coredns/tls
 
 COPY --from=build /out/coredns /usr/bin/coredns
 COPY docker/Corefile /etc/coredns/Corefile
 COPY --chmod=0755 docker/entrypoint.sh /entrypoint.sh
 
+RUN setcap cap_net_bind_service=+ep /usr/bin/coredns \
+    && getcap /usr/bin/coredns | grep -q cap_net_bind_service \
+    && chown -R coredns:coredns /var/lib/coredns /etc/coredns \
+    && chmod 0750 /var/lib/coredns /etc/coredns
+
 ENV TZ=UTC
 EXPOSE 53/udp 53/tcp 8080 9153
 VOLUME ["/var/lib/coredns"]
 WORKDIR /var/lib/coredns
+USER coredns
 HEALTHCHECK --interval=10s --timeout=3s --start-period=8s --retries=5 \
     CMD wget -qO- http://127.0.0.1:8080/api/v1/health >/dev/null || exit 1
 

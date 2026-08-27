@@ -23,6 +23,8 @@ services:
     environment:
       COREDNS_ADMIN_BOOTSTRAP_PASSWORD: ${COREDNS_ADMIN_BOOTSTRAP_PASSWORD:-changeme}
       TZ: UTC
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: "0"
     volumes:
       - coredns-data:/var/lib/coredns
     healthcheck:

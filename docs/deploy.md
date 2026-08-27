@@ -26,6 +26,13 @@ docker run --rm \
   ghcr.io/skymoore/coredns-ez:v1.14.7
 ```
 
+The process is `coredns` (uid **65532**), not root. The binary has
+`cap_net_bind_service` for :53. If listen fails, add
+`--sysctl net.ipv4.ip_unprivileged_port_start=0`. A fresh named volume
+inherits that uid. An older root-owned volume: start once with `--user 0`
+(the entrypoint chowns `/var/lib/coredns` and drops to 65532). Bind-mount
+the data dir only if it is writable by 65532.
+
 UI: `http://127.0.0.1:8080` user `admin`. Recursion and public AXFR are off.
 If host :53 is taken, map `5353:53`. Persist `/var/lib/coredns`. After the first
 GHCR push, set the package visibility to **public** in GitHub. The image is
@@ -130,9 +137,9 @@ schema changes are additive.
   first. Re-run `install.sh` once on any host that still has the binary in
   `/usr/local/bin` — that directory is not writable by `coredns`.
 - Docker: `docker pull ghcr.io/skymoore/coredns-ez:<tag>` and recreate the
-  container with the **same volume**. In-UI update rewrites `/usr/bin/coredns`
-  in the container layer (root); prefer a pull. Use `--restart unless-stopped`
-  (compose already does).
+  container with the **same volume**. The process is not root, so in-UI
+  update cannot replace `/usr/bin/coredns`; pull a new image. Use
+  `--restart unless-stopped` (compose already does).
 - Host: re-run `scripts/install.sh` (same curl line as install). It replaces
   the binary, restores `cap_net_bind_service`, refreshes the unit if needed,
   and restarts CoreDNS if it is already running. Corefile and unbound.conf

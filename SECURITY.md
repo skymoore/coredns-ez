@@ -21,6 +21,9 @@ CoreDNS or CNCF product.
   publish that port unless you mean to.
 - **Bootstrap password** is required (or generated and printed) on first start.
   Set `COREDNS_ADMIN_BOOTSTRAP_PASSWORD` and keep the sqlite volume.
+- **The Docker image does not run as root.** USER is `coredns` (uid 65532).
+  Port 53 uses `cap_net_bind_service`. Do not pass `--user 0` except to chown
+  an old volume; the entrypoint then drops privileges.
 
 ## Reporting
 

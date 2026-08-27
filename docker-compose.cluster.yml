@@ -22,6 +22,8 @@ x-coredns: &coredns
     dockerfile: Dockerfile
   image: ghcr.io/skymoore/coredns-ez:local
   restart: unless-stopped
+  sysctls:
+    net.ipv4.ip_unprivileged_port_start: "0"
   networks:
     dnsnet: {}
 

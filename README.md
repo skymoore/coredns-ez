@@ -45,7 +45,7 @@ docker run --rm \
   ghcr.io/skymoore/coredns-ez:v1.14.7
 ```
 
-From a clone: `docker compose up --build`. Recursion off, AXFR localhost-only, Prometheus on `127.0.0.1:9153` inside the container. UI `http://127.0.0.1:8080`. If host :53 is taken, map `5353:53`.
+From a clone: `docker compose up --build`. Runs as uid 65532 (`coredns`), not root. Recursion off, AXFR localhost-only, Prometheus on `127.0.0.1:9153` inside the container. UI `http://127.0.0.1:8080`. If host :53 is taken, map `5353:53`.
 
 Primary + secondary (fixed 172.30.80.0/24):
 
