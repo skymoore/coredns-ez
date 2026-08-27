@@ -4,62 +4,11 @@ import (
 	"bufio"
 	"fmt"
 	"io"
-	"io/fs"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/miekg/dns"
 )
-
-func writeJournalFile(path, origin string, history int, current uint32, incs []increment) error {
-	dir := filepath.Dir(path)
-	if dir == "" {
-		dir = "."
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-
-	mode := fs.FileMode(0o644)
-	if st, err := os.Stat(path); err == nil {
-		mode = st.Mode().Perm()
-	}
-
-	f, err := os.CreateTemp(dir, ".ixfr-*")
-	if err != nil {
-		return err
-	}
-	tmp := f.Name()
-	cleanup := true
-	defer func() {
-		if cleanup {
-			_ = os.Remove(tmp)
-		}
-	}()
-
-	if err := writeJournal(f, origin, history, current, incs); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Chmod(mode); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return err
-	}
-	cleanup = false
-	return syncDir(dir)
-}
 
 func writeJournal(w io.Writer, origin string, history int, current uint32, incs []increment) error {
 	if _, err := fmt.Fprintf(w, "; ixfr-journal origin=%s current=%d history=%d\n", origin, current, history); err != nil {
@@ -81,18 +30,6 @@ func writeJournal(w io.Writer, origin string, history int, current uint32, incs 
 		}
 	}
 	return nil
-}
-
-func readJournalFile(path string) ([]increment, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	defer f.Close()
-	return parseJournal(f)
 }
 
 func parseJournal(r io.Reader) ([]increment, error) {
@@ -148,13 +85,4 @@ func parseJournal(r io.Reader) ([]increment, error) {
 	}
 	flush()
 	return incs, nil
-}
-
-func syncDir(dir string) error {
-	d, err := os.Open(dir)
-	if err != nil {
-		return err
-	}
-	defer d.Close()
-	return d.Sync()
 }

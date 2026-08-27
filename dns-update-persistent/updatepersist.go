@@ -1,5 +1,5 @@
 // Package dnsupdatepersist implements RFC 2136 Dynamic Updates for one zone
-// held in memory and rewritten in place to its master file after every
+// held in memory and persisted through PersistFunc (SQLite) after every
 // mutating UPDATE.
 //
 // Protocol behaviour is copied from the out-of-tree dynupdate plugin; this
@@ -22,14 +22,13 @@
 //
 // The zone is kept as a flat []dns.RR. An UPDATE is applied to a COPY of that
 // slice, and only if every prerequisite passed, the whole update section
-// prescanned clean, and the resulting master file was atomically replaced is
+// prescanned clean, and the persist backend has accepted the new generation is
 // a fresh file.Zone built and swapped in under a write lock. RFC 2136
 // §3.4.2.1 requires the update be atomic — a reader must never observe half
 // of it — and rebuilding is the cheapest way to get that without
 // reimplementing the tree's delete semantics.
 //
-// The on-disk file is the same path as the seed (`file PATH`). Adds appear
-// there; deletes disappear. A no-op UPDATE does not rewrite the file.
+// A no-op UPDATE does not persist or bump the serial.
 //
 // Rebuilding is O(zone) per update. That is a deliberate trade: this plugin
 // exists for ACME challenges and similar low-rate mutation, where correctness
@@ -54,7 +53,7 @@ var log = clog.NewWithPlugin(pluginName)
 const pluginName = "dns-update-persistent"
 
 // UpdatePersist serves one zone, accepts RFC 2136 UPDATE messages for it, and
-// rewrites the zone's master file after every mutating update.
+// persists the zone through PersistFunc after every mutating update.
 type UpdatePersist struct {
 	Next plugin.Handler
 
@@ -72,15 +71,14 @@ type UpdatePersist struct {
 	// from Transfer so first-Transferer-wins lands on the journal.
 	ixfr *ixfr.IXFR
 
-	// mutable, when non-nil, is the set of RR types this plugin will let an
-	// UPDATE touch. nil means "no type policy" — RFC 2136's own rules still
-	// apply. The point of an allowlist is that an UPDATE key which only needs
-	// to publish TXT challenges should not also be able to repoint an A
-	// record, and TSIG alone cannot express that.
+	// mutable, when non-nil, is the set of RR types a wire RFC 2136 UPDATE
+	// may touch. nil means no type policy. HTTP Apply (the admin UI) does
+	// not use this allowlist: operators already authenticated there can
+	// edit SOA/NS. TSIG cannot express that split, which is why it exists.
 	mutable map[uint16]bool
 
-	// seedPath is both the startup load and the persist destination.
-	seedPath string
+	// persistFn is the durable store (SQLite). Required for mutations.
+	persistFn PersistFunc
 
 	// source is zonereg.SourceAdmin or zonereg.SourceCorefile. Empty means corefile.
 	source string
@@ -129,7 +127,7 @@ func (d *UpdatePersist) Name() string { return pluginName }
 // build turns a flat record slice into the servable view. The returned view's
 // Next is d.Next, so a name outside this zone still falls through the chain.
 func (d *UpdatePersist) build(rrs []dns.RR) (*file.File, error) {
-	z := file.NewZone(d.Zone, d.seedPath)
+	z := file.NewZone(d.Zone, "")
 	for _, rr := range rrs {
 		// Insert mutates the RR it is given (it lower-cases owner and target
 		// names), so hand it a copy — d.rrs is shared with readers of the

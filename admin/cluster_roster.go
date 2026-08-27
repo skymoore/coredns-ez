@@ -1,8 +1,11 @@
 package admin
 
 import (
+	"fmt"
+	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/skymoore/coredns-ez/admin/store"
@@ -37,6 +40,30 @@ func (a *Admin) nodeName() string {
 	return n
 }
 
+func normalizeDNSAddr(raw string) (string, error) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return "", fmt.Errorf("dns address required")
+	}
+	host, port := s, "53"
+	if h, p, err := net.SplitHostPort(s); err == nil {
+		host, port = h, p
+	} else if ip := net.ParseIP(s); ip != nil {
+		host = ip.String()
+	}
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return "", fmt.Errorf("dns host required")
+	}
+	if hostIsLoopback(host) {
+		return "", fmt.Errorf("dns address cannot be loopback")
+	}
+	if _, err := strconv.Atoi(port); err != nil || port == "" {
+		return "", fmt.Errorf("invalid dns port")
+	}
+	return net.JoinHostPort(host, port), nil
+}
+
 func hostIsLoopback(host string) bool {
 	h := strings.ToLower(strings.TrimSpace(host))
 	h = strings.TrimPrefix(h, "https://")
@@ -50,6 +77,20 @@ func hostIsLoopback(host string) bool {
 		h = h[:i]
 	}
 	return h == "127.0.0.1" || h == "localhost" || h == "::1" || h == "0.0.0.0"
+}
+
+func normalizeMemberAPIURL(raw string) (string, error) {
+	u := strings.TrimRight(strings.TrimSpace(raw), "/")
+	if u == "" {
+		return "", fmt.Errorf("api url required")
+	}
+	if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
+		return "", fmt.Errorf("api url must be http:// or https://")
+	}
+	if hostIsLoopback(u) {
+		return "", fmt.Errorf("api url cannot be loopback")
+	}
+	return u, nil
 }
 
 func publicAPIURL(r *http.Request, explicit, dnsAddr string) string {
@@ -120,8 +161,17 @@ func (a *Admin) ensureSelfMember(apiURL string) error {
 	}
 	name := a.nodeName()
 	adv, _ := a.db.Meta(store.MetaAdvertise)
+	dnsAddr := adv
+	if existing, err := a.db.GetMember(id); err == nil {
+		if existing.APIURL != "" && !hostIsLoopback(existing.APIURL) {
+			apiURL = ""
+		}
+		if existing.DNSAddr != "" {
+			dnsAddr = ""
+		}
+	}
 	changed, err := a.db.UpsertRosterMember(store.Member{
-		ID: id, Name: name, APIURL: apiURL, DNSAddr: adv, Role: store.MemberPrimary,
+		ID: id, Name: name, APIURL: apiURL, DNSAddr: dnsAddr, Role: store.MemberPrimary,
 	})
 	if err != nil {
 		return err

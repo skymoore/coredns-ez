@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/miekg/dns"
 )
 
 func TestUsersAndSnapshot(t *testing.T) {
@@ -56,11 +58,18 @@ func TestUsersAndSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s2.Close() })
+	if snap.JWTHMAC == "" {
+		t.Fatal("snapshot missing jwt_hmac")
+	}
 	if err := s2.ApplySnapshot(snap); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s2.GetUserByName("admin"); err != nil {
 		t.Fatal("replica missing user")
+	}
+	gotHMAC, err := s2.Meta(MetaJWTHMAC)
+	if err != nil || gotHMAC != snap.JWTHMAC {
+		t.Fatalf("replica jwt_hmac %q %v", gotHMAC, err)
 	}
 	got, err := s2.ListMembers()
 	if err != nil || len(got) != 2 {
@@ -119,6 +128,108 @@ func TestUsersAndSnapshot(t *testing.T) {
 	if wire.Users[0].PasswordHash != "x" {
 		t.Fatalf("cluster JSON dropped password_hash: %s", raw)
 	}
+}
+
+func TestRecordsRoundTripAndSnapshot(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "api.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	origin := "example.com."
+	soa, err := rr(`example.com. 300 IN SOA ns.example.com. host.example.com. 1 3600 600 86400 60`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ns, err := rr(`example.com. 300 IN NS ns.example.com.`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := rr(`www.example.com. 60 IN A 192.0.2.10`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReplaceRecords(origin, "", []dns.RR{soa, ns, a}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ListRecords(origin, "")
+	if err != nil || len(got) != 3 {
+		t.Fatalf("public records %+v %v", got, err)
+	}
+	viewA, err := rr(`www.example.com. 60 IN A 10.1.2.3`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReplaceRecords(origin, "internal", []dns.RR{soa, ns, viewA}); err != nil {
+		t.Fatal(err)
+	}
+	if !s.HasRecords(origin, "internal") {
+		t.Fatal("expected view rows")
+	}
+	snap, err := s.Snapshot()
+	if err != nil || len(snap.Records) != 6 {
+		t.Fatalf("snapshot records %d %v", len(snap.Records), err)
+	}
+	s2, err := Open(filepath.Join(t.TempDir(), "replica.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s2.Close() })
+	if err := s2.ApplySnapshot(snap); err != nil {
+		t.Fatal(err)
+	}
+	pub, err := s2.ListRecords(origin, "")
+	if err != nil || len(pub) != 3 {
+		t.Fatalf("replica public %+v %v", pub, err)
+	}
+	if err := s.RenameRecordView("internal", "office"); err != nil {
+		t.Fatal(err)
+	}
+	if s.HasRecords(origin, "internal") || !s.HasRecords(origin, "office") {
+		t.Fatal("rename view")
+	}
+	if err := s.SaveIXFR(origin, []byte("; ixfr\n")); err != nil {
+		t.Fatal(err)
+	}
+	body, err := s.LoadIXFR(origin)
+	if err != nil || string(body) != "; ixfr\n" {
+		t.Fatalf("ixfr %q %v", body, err)
+	}
+}
+
+func TestEnsureRecursionSeedsFromACLsOnce(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "api.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	if _, err := s.InsertACL(ACL{Name: "internal", Networks: []string{"10.0.0.0/8", "192.168.0.0/16"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EnsureRecursion(); err != nil {
+		t.Fatal(err)
+	}
+	got := s.Recursion()
+	if len(got) != 2 {
+		t.Fatalf("%+v", got)
+	}
+	if err := s.SetRecursion([]string{"172.16.0.0/12"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EnsureRecursion(); err != nil {
+		t.Fatal(err)
+	}
+	got = s.Recursion()
+	if len(got) != 1 || got[0] != "172.16.0.0/12" {
+		t.Fatalf("ensure must not overwrite %+v", got)
+	}
+}
+
+
+
+func rr(line string) (dns.RR, error) {
+	return dns.NewRR(line)
 }
 
 func TestUpdateACL(t *testing.T) {

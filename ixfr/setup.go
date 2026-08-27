@@ -1,7 +1,6 @@
 package ixfr
 
 import (
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -58,18 +57,14 @@ func parse(c *caddy.Controller) (*IXFR, error) {
 			}
 			x.history = n
 		case "file":
+			// Accepted and ignored: journals persist in SQLite via admin.
 			if !c.NextArg() {
 				return nil, c.ArgErr()
 			}
-			x.path = c.Val()
 		default:
 			return nil, c.Errf("unknown property %q", c.Val())
 		}
 	}
 
-	config := dnsserver.GetConfig(c)
-	if x.path != "" && !filepath.IsAbs(x.path) && config.Root != "" {
-		x.path = filepath.Join(config.Root, x.path)
-	}
 	return x, nil
 }

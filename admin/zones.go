@@ -18,30 +18,63 @@ type zoneJSON struct {
 	TransferFrom []string `json:"transfer_from,omitempty"`
 	Mutable      []string `json:"mutable,omitempty"`
 	Serial       uint32   `json:"serial,omitempty"`
+	Dnssec       bool     `json:"dnssec"`
 }
 
 func (a *Admin) handleListZones(w http.ResponseWriter, _ *http.Request) {
-	infos := zonereg.All()
-	out := make([]zoneJSON, 0, len(infos))
-	for _, info := range infos {
+	seen := map[string]bool{}
+	signed := a.db.DNSSECOriginSet()
+	var out []zoneJSON
+	rows, _ := a.db.ListZones()
+	for _, row := range rows {
+		z := zoneFromRow(row)
+		z.Dnssec = signed[z.Origin]
+		seen[z.Origin] = true
+		out = append(out, z)
+	}
+	for _, info := range zonereg.All() {
+		if seen[info.Origin] {
+			continue
+		}
 		z := zoneJSON{Origin: info.Origin, Kind: info.Kind, Source: info.Source, Path: info.Path}
-		if p := zonereg.PrimaryOf(info.Origin); p != nil {
-			if soa := soaOf(p.Records()); soa != nil {
-				z.Serial = soa.Serial
-			}
-		}
-		if s := zonereg.SecondaryOf(info.Origin); s != nil {
-			z.TransferFrom = s.TransferFrom()
-			if soa := soaOf(s.Records()); soa != nil {
-				z.Serial = soa.Serial
-			}
-		}
-		if row, err := a.db.GetZone(info.Origin); err == nil {
-			z.Mutable = store.SplitCSV(row.Mutable)
-		}
+		fillZoneRuntime(&z)
+		z.Dnssec = signed[z.Origin]
 		out = append(out, z)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"zones": out})
+}
+
+func zoneFromRow(row store.ZoneRow) zoneJSON {
+	z := zoneJSON{
+		Origin:       row.Origin,
+		Kind:         row.Kind,
+		Source:       row.Source,
+		Mutable:      store.SplitCSV(row.Mutable),
+		TransferFrom: store.SplitCSV(row.TransferFrom),
+	}
+	fillZoneRuntime(&z)
+	return z
+}
+
+func fillZoneRuntime(z *zoneJSON) {
+	if p := zonereg.PrimaryOf(z.Origin); p != nil {
+		z.Kind = zonereg.KindPrimary
+		z.Source = p.Source()
+		z.Path = p.Path()
+		if soa := soaOf(p.Records()); soa != nil {
+			z.Serial = soa.Serial
+		}
+		return
+	}
+	if s := zonereg.SecondaryOf(z.Origin); s != nil {
+		z.Kind = zonereg.KindSecondary
+		z.Source = s.Source()
+		z.Path = s.Path()
+		z.TransferFrom = s.TransferFrom()
+		if soa := soaOf(s.Records()); soa != nil {
+			z.Serial = soa.Serial
+		}
+	}
 }
 
 func (a *Admin) handleCreateZone(w http.ResponseWriter, r *http.Request) {
@@ -53,6 +86,7 @@ func (a *Admin) handleCreateZone(w http.ResponseWriter, r *http.Request) {
 		Origin       string   `json:"origin"`
 		Type         string   `json:"type"`
 		NS           string   `json:"ns"`
+		Rname        string   `json:"rname"`
 		TransferFrom []string `json:"transfer_from"`
 		Mutable      []string `json:"mutable"`
 	}
@@ -66,7 +100,7 @@ func (a *Admin) handleCreateZone(w http.ResponseWriter, r *http.Request) {
 	var err error
 	switch body.Type {
 	case zonereg.KindPrimary:
-		err = a.createPrimary(body.Origin, body.NS, body.Mutable)
+		err = a.createPrimary(body.Origin, body.NS, body.Rname, body.Mutable)
 	case zonereg.KindSecondary:
 		err = a.createSecondary(body.Origin, body.TransferFrom)
 	default:
@@ -100,6 +134,12 @@ func (a *Admin) handleGetZoneOrigin(w http.ResponseWriter, origin string) {
 		}
 	}
 	if !ok {
+		if row, err := a.db.GetZone(origin); err == nil {
+			z := zoneFromRow(row)
+			z.Dnssec = a.db.DNSSECOriginSet()[origin]
+			writeJSON(w, http.StatusOK, z)
+			return
+		}
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
@@ -115,6 +155,7 @@ func (a *Admin) handleGetZoneOrigin(w http.ResponseWriter, origin string) {
 			z.Serial = soa.Serial
 		}
 	}
+	z.Dnssec = a.db.DNSSECOriginSet()[origin]
 	writeJSON(w, http.StatusOK, z)
 }
 
@@ -127,18 +168,21 @@ func (a *Admin) handleDeleteZone(w http.ResponseWriter, r *http.Request) {
 	info := zonereg.PrimaryOf(origin)
 	sec := zonereg.SecondaryOf(origin)
 	if info == nil && sec == nil {
-		writeError(w, http.StatusNotFound, "not found")
-		return
-	}
-	src := ""
-	if info != nil {
-		src = info.Source()
+		if _, err := a.db.GetZone(origin); err != nil {
+			writeError(w, http.StatusNotFound, "not found")
+			return
+		}
 	} else {
-		src = sec.Source()
-	}
-	if src != zonereg.SourceAdmin {
-		writeError(w, http.StatusConflict, "corefile zones cannot be deleted via the admin plugin")
-		return
+		src := ""
+		if info != nil {
+			src = info.Source()
+		} else {
+			src = sec.Source()
+		}
+		if src != zonereg.SourceAdmin {
+			writeError(w, http.StatusConflict, "corefile zones cannot be deleted via the admin plugin")
+			return
+		}
 	}
 	if err := a.deleteZone(origin); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())

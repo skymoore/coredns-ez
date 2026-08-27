@@ -14,9 +14,9 @@ import (
 // of it is applied. An update that fails halfway is the one outcome RFC 2136
 // §3.4.2.1 forbids.
 //
-// A mutating update is persisted to seedPath before the in-memory view is
-// swapped. NOERROR therefore means the new zone is on disk. A write failure
-// leaves memory and disk on the previous generation and returns SERVFAIL.
+// A mutating update is persisted before the in-memory view is swapped.
+// NOERROR therefore means the new zone is in SQLite. A write failure
+// leaves memory and the store on the previous generation and returns SERVFAIL.
 func (d *UpdatePersist) serveUpdate(w dns.ResponseWriter, r *dns.Msg) (int, error) {
 	// §3.1.1 — the Zone section is exactly one record, of type SOA, in the
 	// zone's own class.
@@ -49,7 +49,7 @@ func (d *UpdatePersist) serveUpdate(w dns.ResponseWriter, r *dns.Msg) (int, erro
 	if rcode := d.checkPrereqs(r.Answer); rcode != dns.RcodeSuccess {
 		return d.reply(w, r, rcode)
 	}
-	if rcode := d.prescan(r.Ns); rcode != dns.RcodeSuccess {
+	if rcode := d.prescan(r.Ns, true); rcode != dns.RcodeSuccess {
 		return d.reply(w, r, rcode)
 	}
 
@@ -70,7 +70,7 @@ func (d *UpdatePersist) commitLocked(zone string, updates []dns.RR) int {
 
 	bumpSerial(updated)
 	if err := d.persistUpdated(updated); err != nil {
-		log.Errorf("persisting %s to %s: %v", zone, d.seedPath, err)
+		log.Errorf("persisting %s: %v", zone, err)
 		writeCount.WithLabelValues(d.Zone, "error").Inc()
 		return dns.RcodeServerFailure
 	}
@@ -225,7 +225,7 @@ func (d *UpdatePersist) checkPrereqs(prereqs []dns.RR) int {
 // prescan implements §3.4.1: reject the entire update if any single record in
 // it is malformed, out of zone, or against policy. Nothing has been applied at
 // this point, which is the whole reason the RFC separates the two passes.
-func (d *UpdatePersist) prescan(updates []dns.RR) int {
+func (d *UpdatePersist) prescan(updates []dns.RR, enforceMutable bool) int {
 	for _, rr := range updates {
 		h := rr.Header()
 		if !d.inZone(h.Name) {
@@ -256,10 +256,9 @@ func (d *UpdatePersist) prescan(updates []dns.RR) int {
 		}
 
 		// Type policy is checked here, in the prescan, so a disallowed type
-		// rejects the whole update rather than letting part of it land. An
-		// UPDATE key that only needs to publish ACME challenges should not be
-		// able to repoint an A record, and TSIG cannot express that.
-		if d.mutable != nil && h.Rrtype != dns.TypeANY && !d.mutable[h.Rrtype] {
+		// rejects the whole wire UPDATE rather than letting part of it land.
+		// HTTP Apply skips this: the admin UI is already authenticated.
+		if enforceMutable && d.mutable != nil && h.Rrtype != dns.TypeANY && !d.mutable[h.Rrtype] {
 			log.Warningf("UPDATE for %s rejected: type %s is not in the mutable set",
 				h.Name, dns.TypeToString[h.Rrtype])
 			return dns.RcodeRefused
@@ -285,15 +284,24 @@ func (d *UpdatePersist) apply(updates []dns.RR) ([]dns.RR, bool) {
 
 		switch h.Class {
 		case dns.ClassINET:
-			// §3.4.2.3. SOA is special: an added SOA only takes effect if its
-			// serial is greater than the current one, so a stale updater
-			// cannot wind the zone backwards.
+			// §3.4.2.2. An added SOA replaces the existing one only when its
+			// serial is greater, so a stale updater cannot wind the zone
+			// backwards. A greater serial replaces in place — a zone has
+			// exactly one SOA.
 			if h.Rrtype == dns.TypeSOA {
 				cur := soaOf(out)
-				new, ok := rr.(*dns.SOA)
-				if !ok || cur == nil || !serialGreater(new.Serial, cur.Serial) {
+				newSOA, ok := rr.(*dns.SOA)
+				if !ok || cur == nil || !serialGreater(newSOA.Serial, cur.Serial) {
 					continue
 				}
+				for i, x := range out {
+					if _, ok := x.(*dns.SOA); ok {
+						out[i] = dns.Copy(rr)
+						changed = true
+						break
+					}
+				}
+				continue
 			}
 			// CNAME exclusivity, both directions. Silently ignored rather than
 			// rejected, per §3.4.2.3.

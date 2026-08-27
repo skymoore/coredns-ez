@@ -3,7 +3,6 @@ package secondarypersist
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -38,15 +37,16 @@ func TestTransferInCatalogPersistsMembers(t *testing.T) {
 	}
 	waitForAnswer(t, s, "www.example.org.", dns.TypeA)
 
-	waitForPersist(t, s, s.pathFor("example.org."), 1)
-	waitForPersist(t, s, s.pathFor(origin), 1)
+	waitForPersist(t, s, "example.org.", 1)
+	waitForPersist(t, s, origin, 1)
 
 	zones.set(origin, catalogZoneRecordsWithoutMembers(t))
 	if err := s.transferIn(origin, z, nil); err != nil {
 		t.Fatalf("transferIn returned error: %v", err)
 	}
-	if _, err := os.Stat(s.pathFor("example.org.")); !os.IsNotExist(err) {
-		t.Fatalf("expected member persist file to be removed, stat err %v", err)
+	store := s.records.(*memStore)
+	if rrs, _ := store.Load("example.org."); len(rrs) != 0 {
+		t.Fatalf("expected member sqlite zone removed, got %d rrs", len(rrs))
 	}
 }
 

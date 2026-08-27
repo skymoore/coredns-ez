@@ -58,6 +58,9 @@ insert_plugins() {
   if ! grep -q "^secondary-persistent:${PLUGIN_MODULE}/secondary-persistent\$" "$cfg"; then
     insert_after "$cfg" '^secondary:secondary$' "secondary-persistent:${PLUGIN_MODULE}/secondary-persistent"
   fi
+  if ! grep -q "^qstat:${PLUGIN_MODULE}/admin\$" "$cfg"; then
+    insert_after "$cfg" '^transfer:transfer$' "qstat:${PLUGIN_MODULE}/admin"
+  fi
 }
 
 ensure_replace() {

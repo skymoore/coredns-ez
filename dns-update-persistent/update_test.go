@@ -3,14 +3,21 @@ package dnsupdatepersist
 import (
 	"context"
 	"net"
-	"os"
-	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/coredns/coredns/plugin/transfer"
 	"github.com/miekg/dns"
 	"github.com/skymoore/coredns-ez/ixfr"
 )
+
+type memJournal struct{ body []byte }
+
+func (m *memJournal) Load(string) ([]byte, error) { return m.body, nil }
+func (m *memJournal) Save(_ string, data []byte) error {
+	m.body = append([]byte(nil), data...)
+	return nil
+}
 
 const seedZone = `$ORIGIN example.org.
 $TTL 300
@@ -44,37 +51,57 @@ func (w *testWriter) TsigStatus() error {
 	return dns.ErrSig
 }
 
+type memPersist struct {
+	rrs  []dns.RR
+	fail error
+	n    int
+}
+
+func (m *memPersist) save(rrs []dns.RR) error {
+	if m.fail != nil {
+		return m.fail
+	}
+	out := make([]dns.RR, len(rrs))
+	for i, rr := range rrs {
+		out[i] = dns.Copy(rr)
+	}
+	m.rrs = out
+	m.n++
+	return nil
+}
+
 func newTestPlugin(t *testing.T, mutable map[uint16]bool) *UpdatePersist {
 	t.Helper()
-
-	dir := t.TempDir()
-	path := filepath.Join(dir, "db.example.org")
-	if err := os.WriteFile(path, []byte(seedZone), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	rrs, err := readZone(path, "example.org.")
-	if err != nil {
-		t.Fatalf("readZone: %v", err)
-	}
-
-	d := &UpdatePersist{Zone: "example.org.", rrs: rrs, mutable: mutable, seedPath: path}
-	if err := d.swap(rrs); err != nil {
-		t.Fatalf("swap: %v", err)
-	}
+	d, _ := newTestPluginPersist(t, mutable)
 	return d
 }
 
-func reloadFromDisk(t *testing.T, d *UpdatePersist) *UpdatePersist {
+func newTestPluginPersist(t *testing.T, mutable map[uint16]bool) (*UpdatePersist, *memPersist) {
 	t.Helper()
-	rrs, err := readZone(d.seedPath, d.Zone)
+	rrs, err := parseSeed(seedZone, "example.org.")
 	if err != nil {
-		t.Fatalf("readZone(%s): %v", d.seedPath, err)
+		t.Fatalf("parse seed: %v", err)
 	}
-	n := &UpdatePersist{Zone: d.Zone, seedPath: d.seedPath, rrs: rrs, mutable: d.mutable}
-	if err := n.swap(rrs); err != nil {
-		t.Fatalf("swap: %v", err)
+	d, err := NewFromRecords("example.org.", rrs, mutable)
+	if err != nil {
+		t.Fatal(err)
 	}
+	m := &memPersist{rrs: d.Records()}
+	d.SetPersist(m.save)
+	return d, m
+}
+
+func parseSeed(body, origin string) ([]dns.RR, error) {
+	return readZoneReader(strings.NewReader(body), origin)
+}
+
+func reloadFromPersist(t *testing.T, d *UpdatePersist, m *memPersist) *UpdatePersist {
+	t.Helper()
+	n, err := NewFromRecords(d.Zone, m.rrs, d.mutable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n.SetPersist(m.save)
 	return n
 }
 
@@ -282,9 +309,9 @@ func TestTransferIncludesDynamicRecords(t *testing.T) {
 
 func TestTransferDefersToIXFR(t *testing.T) {
 	d := newTestPlugin(t, nil)
-	jpath := filepath.Join(t.TempDir(), "j.ixfr")
-	x := &ixfr.IXFR{}
-	if err := x.Register(d.Zone, jpath, d.rrs); err != nil {
+	x := ixfr.New(d.Zone, 8)
+	x.SetBackend(&memJournal{})
+	if err := x.Register(d.Zone, d.rrs); err != nil {
 		t.Fatal(err)
 	}
 	d.ixfr = x
@@ -548,6 +575,26 @@ func TestSOAAddOnlyMovesForward(t *testing.T) {
 	}
 	if after := serialOf(t, d); after != before {
 		t.Errorf("a lower SOA serial was accepted: %d -> %d", before, after)
+	}
+}
+
+func TestSOAAddReplacesWhenSerialMovesForward(t *testing.T) {
+	d := newTestPlugin(t, nil)
+	newer := rr(t, "example.org. 300 IN SOA ns-new.example.org. admin.example.org. 200 3600 900 86400 300")
+	if got := send(t, d, newUpdate(nil, []dns.RR{newer})); got != dns.RcodeSuccess {
+		t.Fatalf("rcode = %s", dns.RcodeToString[got])
+	}
+	var soas []*dns.SOA
+	for _, r := range d.rrs {
+		if s, ok := r.(*dns.SOA); ok {
+			soas = append(soas, s)
+		}
+	}
+	if len(soas) != 1 {
+		t.Fatalf("SOA count = %d, want 1", len(soas))
+	}
+	if !strings.EqualFold(soas[0].Ns, "ns-new.example.org.") {
+		t.Errorf("MNAME = %s, want ns-new.example.org.", soas[0].Ns)
 	}
 }
 

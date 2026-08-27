@@ -132,9 +132,9 @@ func TestParseConfig(t *testing.T) {
 			`secondary-persistent example.org {
 				transfer from 127.0.0.1
 			}`,
-			true,
-			"",
-			nil,
+			false,
+			"127.0.0.1:53",
+			[]string{"example.org."},
 			fall.F{},
 			nil,
 			false,
@@ -146,12 +146,12 @@ func TestParseConfig(t *testing.T) {
 				catalog
 				persist db.catalog
 			}`,
-			true,
-			"",
-			nil,
-			fall.F{},
-			nil,
 			false,
+			"127.0.0.1:53",
+			[]string{"catalog.example."},
+			fall.F{},
+			map[string]plugin.Zones{"catalog.example.": nil},
+			true,
 			false,
 		},
 		{
@@ -159,12 +159,12 @@ func TestParseConfig(t *testing.T) {
 				transfer from 127.0.0.1
 				persist db.zone
 			}`,
-			true,
-			"",
-			nil,
+			false,
+			"127.0.0.1:53",
+			[]string{"example.org.", "example.net."},
 			fall.F{},
 			nil,
-			false,
+			true,
 			false,
 		},
 		{

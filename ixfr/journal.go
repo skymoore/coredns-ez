@@ -1,6 +1,7 @@
 package ixfr
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 
@@ -19,27 +20,37 @@ type increment struct {
 // Journal is the in-memory IXFR history plus the current snapshot used for
 // AXFR fallback.
 type Journal struct {
-	path    string
 	origin  string
 	history int
+	backend JournalBackend
 	incs    []increment
 	current []dns.RR
 }
 
-func newJournal(path, origin string, history int, current []dns.RR) *Journal {
+func newJournal(origin string, history int, current []dns.RR) *Journal {
 	return &Journal{
-		path:    path,
 		origin:  origin,
 		history: history,
 		current: copyRRs(current),
 	}
 }
 
-func loadJournal(path, origin string, history int, current []dns.RR) (*Journal, error) {
-	j := newJournal(path, origin, history, current)
-	incs, err := readJournalFile(path)
-	if err != nil {
-		return nil, err
+func loadJournal(origin string, history int, current []dns.RR, backend JournalBackend) (*Journal, error) {
+	j := newJournal(origin, history, current)
+	j.backend = backend
+	var incs []increment
+	if backend != nil {
+		body, err := backend.Load(origin)
+		if err != nil {
+			return nil, err
+		}
+		if len(body) > 0 {
+			parsed, err := parseJournal(bytes.NewReader(body))
+			if err != nil {
+				return nil, err
+			}
+			incs = parsed
+		}
 	}
 	cur := serialOf(current)
 	j.incs = reconcile(incs, cur)
@@ -95,13 +106,24 @@ func (j *Journal) commit(old, new []dns.RR) error {
 	if len(next) > j.history {
 		next = next[len(next)-j.history:]
 	}
-	if err := writeJournalFile(j.path, j.origin, j.history, newSOA.Serial, next); err != nil {
+	if err := j.persist(newSOA.Serial, next); err != nil {
 		return err
 	}
 	j.incs = next
 	j.current = copyRRs(new)
 	log.Infof("IXFR committed %s %d -> %d (%d deleted, %d added)", j.origin, inc.oldSerial, inc.newSerial, len(inc.deleted), len(inc.added))
 	return nil
+}
+
+func (j *Journal) persist(serial uint32, incs []increment) error {
+	if j.backend == nil {
+		return nil
+	}
+	var buf bytes.Buffer
+	if err := writeJournal(&buf, j.origin, j.history, serial, incs); err != nil {
+		return err
+	}
+	return j.backend.Save(j.origin, buf.Bytes())
 }
 
 const (

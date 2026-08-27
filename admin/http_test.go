@@ -94,6 +94,32 @@ func TestDenyByDefaultAndLogin(t *testing.T) {
 	}
 }
 
+func TestSqliteGhostZoneIsListedAndDeletable(t *testing.T) {
+	a := testAdmin(t)
+	if err := a.db.UpsertZone(store.ZoneRow{Origin: "sky.sc.", Kind: zonereg.KindPrimary, Source: zonereg.SourceAdmin}); err != nil {
+		t.Fatal(err)
+	}
+	tok := loginToken(t, a)
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/zones", nil)
+	r.Header.Set("Authorization", "Bearer "+tok)
+	w := httptest.NewRecorder()
+	a.mux.ServeHTTP(w, r)
+	if w.Code != http.StatusOK || !bytes.Contains(w.Body.Bytes(), []byte("sky.sc.")) {
+		t.Fatalf("ghost zone missing from list: %d %s", w.Code, w.Body.Bytes())
+	}
+
+	del := httptest.NewRequest(http.MethodDelete, "/api/v1/zones/sky.sc.", nil)
+	del.Header.Set("Authorization", "Bearer "+tok)
+	w = httptest.NewRecorder()
+	a.mux.ServeHTTP(w, del)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("delete ghost: %d %s", w.Code, w.Body.Bytes())
+	}
+	if _, err := a.db.GetZone("sky.sc."); err == nil {
+		t.Fatal("sqlite zone row survived DELETE")
+	}
+}
+
 func TestCreateZoneAndRecord(t *testing.T) {
 	a := testAdmin(t)
 	body, _ := json.Marshal(map[string]string{"username": "admin", "password": "secret"})
@@ -113,6 +139,9 @@ func TestCreateZoneAndRecord(t *testing.T) {
 	if w.Code != http.StatusOK && w.Code != http.StatusCreated {
 		t.Fatalf("create zone: %d %s", w.Code, w.Body.Bytes())
 	}
+	if a.db.HasRecords("example.com.", "") == false {
+		t.Fatal("create zone did not persist SOA/NS to sqlite")
+	}
 
 	rec, _ := json.Marshal(recordJSON{Name: "www.example.com.", Type: "A", TTL: 60, Rdata: "192.0.2.10"})
 	r = httptest.NewRequest(http.MethodPost, "/api/v1/zones/example.com./records", bytes.NewReader(rec))
@@ -129,6 +158,51 @@ func TestCreateZoneAndRecord(t *testing.T) {
 	a.mux.ServeHTTP(w, r)
 	if w.Code != http.StatusOK || !bytes.Contains(w.Body.Bytes(), []byte("192.0.2.10")) {
 		t.Fatalf("list records: %d %s", w.Code, w.Body.Bytes())
+	}
+}
+
+func TestCreateZoneSetsMnameAndRname(t *testing.T) {
+	a := testAdmin(t)
+	token := loginToken(t, a)
+
+	zbody, _ := json.Marshal(map[string]string{
+		"origin": "example.com.",
+		"type":   "primary",
+		"ns":     "ns1.rwx.dev.",
+		"rname":  "sky@rwx.dev",
+	})
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/zones", bytes.NewReader(zbody))
+	r.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	a.mux.ServeHTTP(w, r)
+	if w.Code != http.StatusOK && w.Code != http.StatusCreated {
+		t.Fatalf("create zone: %d %s", w.Code, w.Body.Bytes())
+	}
+
+	r = httptest.NewRequest(http.MethodGet, "/api/v1/zones/example.com./records?name=@&type=SOA", nil)
+	r.Header.Set("Authorization", "Bearer "+token)
+	w = httptest.NewRecorder()
+	a.mux.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("list SOA: %d %s", w.Code, w.Body.Bytes())
+	}
+	body := string(w.Body.Bytes())
+	if !bytes.Contains(w.Body.Bytes(), []byte("ns1.rwx.dev.")) {
+		t.Fatalf("MNAME missing: %s", body)
+	}
+	if !bytes.Contains(w.Body.Bytes(), []byte("sky.rwx.dev.")) {
+		t.Fatalf("RNAME missing: %s", body)
+	}
+	if bytes.Contains(w.Body.Bytes(), []byte("hostmaster.example.com.")) {
+		t.Fatalf("default RNAME still present: %s", body)
+	}
+
+	r = httptest.NewRequest(http.MethodGet, "/api/v1/zones/example.com./records?name=@&type=NS", nil)
+	r.Header.Set("Authorization", "Bearer "+token)
+	w = httptest.NewRecorder()
+	a.mux.ServeHTTP(w, r)
+	if w.Code != http.StatusOK || !bytes.Contains(w.Body.Bytes(), []byte("ns1.rwx.dev.")) {
+		t.Fatalf("apex NS missing: %d %s", w.Code, w.Body.Bytes())
 	}
 }
 
@@ -324,6 +398,103 @@ func TestMetricsAndAudit(t *testing.T) {
 	a.mux.ServeHTTP(w, r)
 	if w.Code != http.StatusOK || !bytes.Contains(w.Body.Bytes(), []byte("zone.create")) {
 		t.Fatalf("audit: %d %s", w.Code, w.Body.Bytes())
+	}
+
+	r = httptest.NewRequest(http.MethodGet, "/api/v1/queries", nil)
+	r.Header.Set("Authorization", "Bearer "+tok)
+	w = httptest.NewRecorder()
+	a.mux.ServeHTTP(w, r)
+	if w.Code != http.StatusOK || !bytes.Contains(w.Body.Bytes(), []byte(`"recent"`)) {
+		t.Fatalf("queries: %d %s", w.Code, w.Body.Bytes())
+	}
+	if !bytes.Contains(w.Body.Bytes(), []byte(`"series"`)) || !bytes.Contains(w.Body.Bytes(), []byte(`"range":"1h"`)) {
+		t.Fatalf("queries default range: %s", w.Body.Bytes())
+	}
+
+	r = httptest.NewRequest(http.MethodGet, "/api/v1/queries?range=24h", nil)
+	r.Header.Set("Authorization", "Bearer "+tok)
+	w = httptest.NewRecorder()
+	a.mux.ServeHTTP(w, r)
+	if w.Code != http.StatusOK || !bytes.Contains(w.Body.Bytes(), []byte(`"range":"24h"`)) {
+		t.Fatalf("queries 24h: %d %s", w.Code, w.Body.Bytes())
+	}
+}
+
+func TestSecondaryMutationsProxyWithSharedHMAC(t *testing.T) {
+	primary := testAdmin(t)
+	primSrv := httptest.NewServer(primary.mux)
+	t.Cleanup(primSrv.Close)
+
+	sec := testAdmin(t)
+	sec.cfg.Role = roleSecondary
+	if err := sec.db.SetMeta(store.MetaPrimaryURL, primSrv.URL); err != nil {
+		t.Fatal(err)
+	}
+
+	tok := loginToken(t, sec)
+	zbody, _ := json.Marshal(map[string]string{"origin": "proxy.test.", "type": "primary"})
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/zones", bytes.NewReader(zbody))
+	r.Header.Set("Authorization", "Bearer "+tok)
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	sec.mux.ServeHTTP(w, r)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("unsynced identity should 401, got %d %s", w.Code, w.Body.Bytes())
+	}
+
+	snap, err := primary.db.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.JWTHMAC == "" {
+		t.Fatal("snapshot missing jwt_hmac")
+	}
+	if err := sec.db.ApplySnapshot(snap); err != nil {
+		t.Fatal(err)
+	}
+	if err := sec.db.SetMeta(store.MetaPrimaryURL, primSrv.URL); err != nil {
+		t.Fatal(err)
+	}
+	tok = loginToken(t, sec)
+	r = httptest.NewRequest(http.MethodPost, "/api/v1/zones", bytes.NewReader(zbody))
+	r.Header.Set("Authorization", "Bearer "+tok)
+	r.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	sec.mux.ServeHTTP(w, r)
+	if w.Code != http.StatusOK && w.Code != http.StatusCreated {
+		t.Fatalf("shared hmac proxied create: %d %s", w.Code, w.Body.Bytes())
+	}
+	if !primary.db.HasRecords("proxy.test.", "") {
+		t.Fatal("primary did not receive proxied zone create")
+	}
+}
+
+func TestProxyTransferStaysOnSecondary(t *testing.T) {
+	called := false
+	prim := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(599)
+	}))
+	t.Cleanup(prim.Close)
+
+	sec := testAdmin(t)
+	sec.cfg.Role = roleSecondary
+	if err := sec.db.SetMeta(store.MetaPrimaryURL, prim.URL); err != nil {
+		t.Fatal(err)
+	}
+	tok := loginToken(t, sec)
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/zones/rwx.dev./transfer", nil)
+	r.Header.Set("Authorization", "Bearer "+tok)
+	w := httptest.NewRecorder()
+	sec.mux.ServeHTTP(w, r)
+	if called {
+		t.Fatal("zone transfer was proxied to the primary")
+	}
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("local transfer: %d %s", w.Code, w.Body.Bytes())
+	}
+	if !bytes.Contains(w.Body.Bytes(), []byte("not a secondary")) {
+		t.Fatalf("want local not-a-secondary, got %s", w.Body.Bytes())
 	}
 }
 

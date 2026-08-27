@@ -16,22 +16,20 @@ This requires the small CoreDNS patch in `patches/coredns-http-handler.patch`
 CoreDNS still compiles the plugin; non-DoH paths on 443 remain 404.
 
 A process is a **primary** or a **secondary**. The Corefile starts *admin*; zones
-are created through the API and stored as RFC 1035 master files under `data`.
-SQLite (`db`) holds users, API tokens, OIDC settings, TSIG keys, cluster membership, and
-the zone inventory. Record data is **not** in SQLite.
+and records live in SQLite (`db`), along with users, API tokens, OIDC settings,
+TSIG keys, and cluster membership. `data` is accepted for compatibility and unused
+for record persist. If the Corefile still names zone files (`file`, *dns-update-persistent*,
+*secondary-persistent*) or CoreDNS `view`/`acl` policy, they are imported into
+SQLite on startup and stripped. Recursion is allowed only for client IPs in an
+ACL. The Corefile should only name listeners, ports, and which plugins are enabled.
 
 Identity: local users (argon2id), bearer API tokens, and optional OIDC.
 Secondaries replicate password/token hashes so the same credentials work on
 both nodes. Record mutations on a secondary are proxied to the primary.
 
 Do not stack *file*, *auto*, *dynupdate*, *secondary*, *secondary-persistent*,
-or *dns-update-persistent* on an origin the admin plugin owns.
-
-Only zones that register in `zonereg` appear in the UI (`GET /api/v1/zones`):
-admin-created zones, *dns-update-persistent*, and *secondary-persistent*.
-The in-tree *file* plugin does **not** register. A Corefile `file` zone still
-answers DNS queries but will not show up in the dashboard. Convert it to
-*dns-update-persistent* (or create it through the API) to manage it here.
+or *dns-update-persistent* on an origin the admin plugin owns. After import,
+those plugins are not in the Corefile; admin serves every origin from SQLite.
 
 ## Syntax
 
@@ -103,7 +101,7 @@ Authenticated JSON for the UI:
 * `GET|POST /api/v1/tsig-keys`, `DELETE /api/v1/tsig-keys/{id}` HMAC keys for nsupdate / signed transfers
 * Filters: `GET /api/v1/filters`; `POST/DELETE /api/v1/filters/rules`; URL lists at `POST /api/v1/filters/feeds` with `sync` `periodic` (refresh on an interval) or `once` (import now, do not refresh). Blocked names that are not in an admin-owned zone are NXDOMAIN. Allow wins. `example.com` matches itself and subdomains; `*.example.com` matches subdomains only.
 * `GET|PUT /api/v1/transfer` extra AXFR IPs (unioned with Corefile `transfer { to }`). IPs only; `*` is rejected. Cluster join appends the secondary DNS address.
-* `GET /api/v1/backup` zip of sqlite, zone files, Corefile, and tls (operator+). Host install puts those trees in `/etc/coredns` and `/var/lib/coredns` owned by `coredns`.
+* `GET /api/v1/backup` zip of sqlite, Corefile, and tls (operator+). Host install puts those trees in `/etc/coredns` and `/var/lib/coredns` owned by `coredns`.
 * `GET|POST /api/v1/update` GitHub release check / self-update (POST is admin; linux only). The running binary’s directory must be writable (`install.sh` places it at `/var/lib/coredns/coredns` and supervises a clean exit so bind capability is restored).
 * Cluster: on the primary, **Add a secondary** mints a one-time join key. On the new node (including a default `role primary` install), Cluster → **Join an existing cluster** and paste the URL + key. Set **This node name** (for example `ns3.dns.rwx.dev`); on the primary, **Rename** edits it later. `COREDNS_NODE_NAME` is the default when joining from Docker. That node becomes a secondary (stored in sqlite so it survives restart). The primary Corefile is copied and rewritten: `role secondary`, `advertise` becomes `dns` (the primary’s DNS), `bind` uses this node’s IP, `db`/`data` stay local, OIDC `redirect_url` is this node’s callback (register it on the IdP). `dns-update-persistent` and `file` zone blocks become `secondary-persistent` (AXFR from the primary, persist the same paths). Referenced zone and TLS files are seeded, then CoreDNS restarts. Users/tokens/TSIG still replicate in sqlite. Login is local, not proxied. If the primary Corefile uses `{$ENV}` secrets, set the same variables on the secondary.
 

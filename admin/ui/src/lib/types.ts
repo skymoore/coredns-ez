@@ -41,6 +41,40 @@ export type Zone = {
   transfer_from?: string[];
   mutable?: string[];
   serial?: number;
+  dnssec?: boolean;
+};
+
+export type DnssecDsData = {
+  key_tag: number;
+  algorithm: number;
+  algorithm_name?: string;
+  digest_type: number;
+  digest_type_name?: string;
+  digest: string;
+};
+
+export type DnssecKeyData = {
+  flags: number;
+  protocol: number;
+  algorithm: number;
+  algorithm_name?: string;
+  public_key: string;
+};
+
+export type DnssecInfo = {
+  enabled: boolean;
+  algorithm?: string;
+  key_tag?: number;
+  flags?: number;
+  protocol?: number;
+  dnskey?: string;
+  ds?: string;
+  ds_digest?: string;
+  ds_data?: DnssecDsData;
+  key_data?: DnssecKeyData;
+  cds?: string;
+  cdnskey?: string;
+  max_sig_life?: number;
 };
 
 export type DnsRecord = {
@@ -141,12 +175,19 @@ export type Cluster = {
   role: string;
   self_id?: string;
   members: Member[];
+  advertise_dns?: string;
+  primary_dns?: string;
+  primary_dns_override?: string;
 };
 
 export type TransferACL = {
   to: string[];
   corefile: string[];
   effective: string[];
+};
+
+export type Recursion = {
+  networks: string[];
 };
 
 export type AuditRow = {
@@ -172,3 +213,54 @@ export type MetricsSnapshot = {
   scraped_at: number;
   series: MetricPoint[];
 };
+
+export type QueryCount = {
+  name: string;
+  count: number;
+};
+
+export type QueryEvent = {
+  at: number;
+  name: string;
+  type: string;
+  rcode: string;
+  client: string;
+  blocked: boolean;
+  ms: number;
+};
+
+export type QuerySeriesPoint = {
+  t: number;
+  queries: number;
+  blocked: number;
+  nxdomain: number;
+  servfail: number;
+  types: Record<string, number>;
+};
+
+export type QueryStats = {
+  generated_at: number;
+  range: string;
+  range_seconds: number;
+  step_seconds: number;
+  window_seconds: number;
+  qps: number;
+  total: number;
+  blocked: number;
+  nxdomain: number;
+  servfail: number;
+  range_queries: number;
+  range_blocked: number;
+  range_nxdomain: number;
+  range_servfail: number;
+  window_queries: number;
+  window_blocked: number;
+  by_type: QueryCount[];
+  by_rcode: QueryCount[];
+  top_names: QueryCount[];
+  top_blocked: QueryCount[];
+  recent: QueryEvent[];
+  series: QuerySeriesPoint[];
+};
+
+export type QueryRangeId = "5m" | "15m" | "1h" | "6h" | "24h" | "7d";

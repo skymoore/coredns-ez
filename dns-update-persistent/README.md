@@ -2,7 +2,7 @@
 
 ## Name
 
-*dns-update-persistent* - serves a zone, accepts RFC 2136 dynamic updates, and rewrites the zone file in place.
+*dns-update-persistent* - serves a zone, accepts RFC 2136 dynamic updates, and persists the zone to SQLite.
 
 ## Description
 
@@ -18,19 +18,15 @@ Owning the zone also means reads, wildcards, delegation, NODATA proofs and AXFR 
 
 ### Durability
 
-RFC 2136 §3.4.2.1 requires that a client never observe half an update. Every change is applied to a **copy** of the record set. Only once all prerequisites have passed, the entire update section has prescanned clean, **and** the master file has been replaced (temporary file, fsync, rename, directory sync) is a fresh zone swapped in under a write lock.
+RFC 2136 §3.4.2.1 requires that a client never observe half an update. Every change is applied to a **copy** of the record set. Only once all prerequisites have passed, the entire update section has prescanned clean, **and** SQLite has accepted the new generation is a fresh zone swapped in under a write lock.
 
-NOERROR therefore means the new zone is on disk. A write failure returns SERVFAIL and leaves both memory and the file on the previous generation.
+NOERROR therefore means the new zone is in SQLite. A write failure returns SERVFAIL and leaves both memory and the store on the previous generation.
 
-A no-op UPDATE (identical RR, ignored apex SOA/NS delete, CNAME exclusivity skip) is still NOERROR and does **not** rewrite the file or bump the serial.
+A no-op UPDATE (identical RR, ignored apex SOA/NS delete, CNAME exclusivity skip) is still NOERROR and does **not** persist or bump the serial.
 
 Rebuilding is O(zone) per update. That is deliberate: this plugin exists for low-rate mutation (ACME and similar), where atomicity is worth far more than update throughput.
 
-The `file` path is both the seed and the persist destination. The first mutating UPDATE flattens `$INCLUDE`, `$GENERATE`, and comments into a plain RFC 1035 dump. Keep a separate source of truth if you still need those directives.
-
-There is no `ReloadInterval`. Operator edits while the process is down are picked up on the next start. Operator edits while it is up are overwritten by the next successful UPDATE.
-
-If the in-memory rebuild fails after a successful rename (rare: the same records just came from a live zone), this process SERVFAILs that request and keeps serving the previous view; the file is already the new source of truth, so the next restart is correct.
+A Corefile `file` path is a **one-time seed** for import. Mutations never write that file. *admin* imports leftover zone files into SQLite and strips those server blocks.
 
 ### Authentication is the *tsig* plugin's job
 
@@ -52,7 +48,7 @@ dns-update-persistent [ZONE] {
 ~~~
 
 * **ZONE** the zone to serve and accept updates for. Defaults to the server block's zone. Exactly one — two zones in one block would share a lock and a rebuild, so a bad update to either would stall and endanger both.
-* `file` **PATH** the zone file to load at startup **and** the persist destination. **Required**. Relative paths are joined with *root*. Parsed through the same code path as the *file* plugin, so `$ORIGIN`, `$INCLUDE` and `$GENERATE` behave identically on the first load. The existing file mode is preserved on rewrite (a `0600` seed stays `0600`).
+* `file` **PATH** one-time seed to load at parse. Relative paths are joined with *root*. Parsed through the same code path as the *file* plugin. Not a persist destination.
 * `mutable` **TYPE...** restricts updates to these RR types. Omitted, RFC 2136's own rules are the only limit.
 
 ## Compilation
@@ -84,18 +80,18 @@ All five prerequisite forms of §3.2, the prescan/apply split of §3.4.1–2, an
 | Identical record re-added | TTL updated, no serial bump if TTL is unchanged, NOERROR |
 | Serial | incremented on any real change, so a secondary's serial comparison sees it |
 | NOTIFY | sent after a persisted change when *transfer* is configured in the block |
-| Persist | atomic rewrite of `file PATH` before NOERROR; deletes remove the RR from the file |
+| Persist | SQLite write before NOERROR |
 
 ## Known limitations
 
-* **In-place rewrite flattens the seed.** The first mutating UPDATE replaces `$INCLUDE` / `$GENERATE` / comments with a flattened master. Subsequent startups still use `file.Parse`, so a hand-edited `$INCLUDE` between restarts is honored until the next UPDATE.
+* **Seed `file` is import-only.** `$INCLUDE` / `$GENERATE` are honored on that first parse; SQLite stores the flattened RRs.
 * **No NSEC3.** `file.Zone` rejects NSEC3 records outright, so an NSEC3-signed seed zone will not load.
 * **Online signing is the *dnssec* plugin's job.** Place *dns-update-persistent* after it in the chain (the default slot, after `file`, does) so added records are signed on the way out; a bare record served from a signed zone reads as bogus.
 
 ## Metrics
 
 * `coredns_dns_update_persistent_updates_total{zone, rcode}` — UPDATE replies
-* `coredns_dns_update_persistent_writes_total{zone, status}` — disk replaces (`ok`, `error`, `skipped`)
+* `coredns_dns_update_persistent_writes_total{zone, status}` — persist attempts (`ok`, `error`, `skipped`)
 * `coredns_dns_update_persistent_write_duration_seconds{zone}` — write+rename histogram
 * `coredns_dns_update_persistent_serial{zone}` — SOA serial currently served
 

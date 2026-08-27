@@ -62,17 +62,13 @@ rwx.dev {
 		"bind 192.168.8.54",
 		"data /var/lib/coredns/zones",
 		"redirect_url http://192.168.8.54:8080/api/v1/auth/oidc/callback",
-		"secondary-persistent {",
-		"transfer from 192.168.8.53:53",
-		"persist /etc/coredns/zones/db.rwx.dev.internal",
-		"persist /etc/coredns/zones/db.rwx.dev.public",
 	}
 	for _, s := range checks {
 		if !strings.Contains(got, s) {
 			t.Fatalf("missing %q in:\n%s", s, got)
 		}
 	}
-	bans := []string{"role primary", "bootstrap_admin", "advertise 192.168.8.53", "dns-update-persistent", "\tixfr\n", "\tfile /etc/coredns/zones/"}
+	bans := []string{"role primary", "bootstrap_admin", "advertise 192.168.8.53", "dns-update-persistent", "secondary-persistent", "rwx.dev {", "\tfile /etc/coredns/zones/"}
 	for _, s := range bans {
 		if strings.Contains(got, s) {
 			t.Fatalf("still has %q in:\n%s", s, got)
@@ -80,7 +76,7 @@ rwx.dev {
 	}
 }
 
-func TestMergeClusteredCorefileKeepsLocalListener(t *testing.T) {
+func TestMergeClusteredCorefileDoesNotInjectSnippets(t *testing.T) {
 	local := `https://.:8080 {
 	admin {
 		db /var/lib/coredns/admin.sqlite
@@ -91,6 +87,10 @@ func TestMergeClusteredCorefileKeepsLocalListener(t *testing.T) {
 `
 	primary := `(xfer) {
 	transfer { to 192.168.8.54 }
+}
+
+(common) {
+	errors
 }
 
 rwx.dev {
@@ -106,11 +106,8 @@ rwx.dev {
 	if !strings.Contains(got, "https://.:8080") {
 		t.Fatalf("lost local UI listener:\n%s", got)
 	}
-	if !strings.Contains(got, "rwx.dev") || !strings.Contains(got, "secondary-persistent") {
-		t.Fatalf("missing zone block:\n%s", got)
-	}
-	if strings.Contains(got, "dns-update-persistent") {
-		t.Fatal(got)
+	if strings.Contains(got, clusterBegin) || strings.Contains(got, "(xfer)") || strings.Contains(got, "(common)") || strings.Contains(got, "rwx.dev") {
+		t.Fatalf("primary Corefile leaked into secondary:\n%s", got)
 	}
 }
 
@@ -137,40 +134,48 @@ func TestCollectCorefileFiles(t *testing.T) {
 	}
 }
 
-func TestApplyCorefileWritesAndHashes(t *testing.T) {
+func TestApplyCorefileStripsClusterSection(t *testing.T) {
 	a := testAdmin(t)
 	conf := filepath.Join(a.cfg.Data, "Corefile")
-	t.Setenv("FAKE", "1")
 	origArgs := os.Args
 	os.Args = []string{"coredns", "-conf", conf}
 	t.Cleanup(func() { os.Args = origArgs })
 
-	src := ".:53 {\n\tadmin {\n\t\trole primary\n\t\tadvertise 10.0.0.1:53\n\t}\n}\n"
-	snap := storeSnapshot(src)
-	if err := a.db.SetMeta(store.MetaMemberID, "me"); err != nil {
+	local := `(common) {
+	bind 192.168.8.54
+	errors
+}
+
+. {
+	admin
+	import common
+}
+
+` + clusterBegin + `
+(common) {
+	bind 192.168.8.54
+	errors
+}
+` + clusterEnd + "\n"
+	if err := os.WriteFile(conf, []byte(local), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	snap.Members = []store.Member{{ID: "me", DNSAddr: "10.0.0.2:53", APIURL: "http://10.0.0.2:8080"}}
-	reload, err := a.applyCorefile(snap)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reload {
-		t.Fatal("expected reload")
+	reload, err := a.applyCorefile(store.Snapshot{})
+	if err != nil || !reload {
+		t.Fatalf("reload=%v err=%v", reload, err)
 	}
 	got, err := os.ReadFile(conf)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(got), "role secondary") || !strings.Contains(string(got), "dns 10.0.0.1:53") {
-		t.Fatalf("%s", got)
+	if strings.Contains(string(got), clusterBegin) || strings.Count(string(got), "(common)") != 1 {
+		t.Fatalf("cluster leftovers still present:\n%s", got)
 	}
-	reload, err = a.applyCorefile(snap)
+	if !strings.Contains(string(got), "import common") {
+		t.Fatalf("stripped too much:\n%s", got)
+	}
+	reload, err = a.applyCorefile(store.Snapshot{})
 	if err != nil || reload {
-		t.Fatalf("second apply reload=%v err=%v", reload, err)
+		t.Fatalf("second strip reload=%v err=%v", reload, err)
 	}
-}
-
-func storeSnapshot(text string) store.Snapshot {
-	return store.Snapshot{Corefile: text, CorefileHash: corefileHash(text)}
 }

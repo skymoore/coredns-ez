@@ -284,8 +284,10 @@ write_corefile() {
 	if want_unbound; then
 		cat >"$corefile" <<EOF
 https://.:8080 {
+	prometheus 127.0.0.1:9153
 	errors
 	log
+	qstat
 	admin {
 		db ${LIB_DIR}/admin.sqlite
 		data ${LIB_DIR}/zones
@@ -295,16 +297,20 @@ https://.:8080 {
 }
 . {
 $(lan_view)
+	prometheus 127.0.0.1:9153
 	errors
 	log
+	qstat
 	admin
 	forward . 127.0.0.1:${UNBOUND_PORT}
 	cache
 $(transfer_block "	")
 }
 . {
+	prometheus 127.0.0.1:9153
 	errors
 	log
+	qstat
 	admin
 $(transfer_block "	")
 }
@@ -312,8 +318,10 @@ EOF
 	else
 		cat >"$corefile" <<EOF
 https://.:8080 {
+	prometheus 127.0.0.1:9153
 	errors
 	log
+	qstat
 	admin {
 		db ${LIB_DIR}/admin.sqlite
 		data ${LIB_DIR}/zones
@@ -322,8 +330,10 @@ https://.:8080 {
 	}
 }
 . {
+	prometheus 127.0.0.1:9153
 	errors
 	log
+	qstat
 	admin
 $(transfer_block "	")
 }

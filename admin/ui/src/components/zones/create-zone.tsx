@@ -13,6 +13,7 @@ export function CreateZone() {
   const [open, setOpen] = useState(false);
   const [origin, setOrigin] = useState("");
   const [ns, setNs] = useState("");
+  const [rname, setRname] = useState("");
   const mut = useMutation({
     mutationFn: () =>
       api("/zones", {
@@ -21,6 +22,7 @@ export function CreateZone() {
           origin: canonicalOrigin(origin),
           type: "primary",
           ns: ns || undefined,
+          rname: rname || undefined,
         }),
       }),
     onSuccess: () => {
@@ -29,6 +31,7 @@ export function CreateZone() {
       setOpen(false);
       setOrigin("");
       setNs("");
+      setRname("");
     },
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "create failed"),
   });
@@ -59,8 +62,23 @@ export function CreateZone() {
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="ns">Apex NS (optional)</Label>
+            <Label htmlFor="ns">Primary nameserver (MNAME)</Label>
             <Input id="ns" value={ns} onChange={(e) => setNs(e.target.value)} placeholder="ns1.example.com." />
+            <p className="text-xs text-muted-foreground">Also the initial apex NS. Defaults to ns1.&lt;origin&gt;.</p>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="rname">Hostmaster (RNAME)</Label>
+            <Input
+              id="rname"
+              value={rname}
+              onChange={(e) => setRname(e.target.value)}
+              placeholder="hostmaster@example.com"
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <p className="text-xs text-muted-foreground">
+              SOA mailbox. Email, or DNS form hostmaster.example.com. Defaults to hostmaster.&lt;origin&gt;.
+            </p>
           </div>
           <div className="flex justify-end">
             <Button type="submit" disabled={mut.isPending}>

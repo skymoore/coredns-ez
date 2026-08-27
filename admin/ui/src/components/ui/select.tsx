@@ -8,19 +8,21 @@ export function Select({
   options,
   placeholder,
   className,
+  disabled,
 }: {
   value: string;
   onValueChange: (v: string) => void;
   options: { value: string; label: string }[];
   placeholder?: string;
   className?: string;
+  disabled?: boolean;
 }) {
   return (
-    <SelectPrimitive.Root value={value} onValueChange={onValueChange}>
+    <SelectPrimitive.Root value={value} onValueChange={onValueChange} disabled={disabled}>
       <SelectPrimitive.Trigger
         aria-label={placeholder ?? "Type"}
         className={cn(
-          "flex h-9 w-full items-center justify-between rounded-md border border-input bg-card px-3 text-sm",
+          "flex h-9 w-full items-center justify-between rounded-md border border-input bg-card px-3 text-sm disabled:opacity-50",
           className,
         )}
       >

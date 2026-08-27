@@ -4,7 +4,7 @@ Independent [CoreDNS](https://coredns.io) build with extra plugins and an embedd
 
 [Releases](https://github.com/skymoore/coredns-ez/releases) are full CoreDNS binaries (same archive names as upstream) plus an Alpine image on GHCR. How to run, TLS, backup, and upgrades: [docs/deploy.md](docs/deploy.md). Hardening notes: [SECURITY.md](SECURITY.md).
 
-The admin plugin multiplexes onto CoreDNS's HTTPS / DoH listener. `/dns-query` stays DoH. `/` is the operator UI (zones, records, ACLs, filters, cluster, users). `/api/v1` is the JSON API. Auth is local users, API tokens, and optional OIDC. Identity lives in SQLite; zone data stays in RFC 1035 master files.
+The admin plugin multiplexes onto CoreDNS's HTTPS / DoH listener. `/dns-query` stays DoH. `/` is the operator UI (zones, records, ACLs, filters, cluster, users). `/api/v1` is the JSON API. Auth is local users, API tokens, and optional OIDC. Identity and DNS records live in SQLite.
 
 ## Releases
 
@@ -74,7 +74,7 @@ secondary-persistent:github.com/skymoore/coredns-ez/secondary-persistent
 
 ## dns-update-persistent
 
-RFC 2136 dynamic updates for a single zone, with the master file rewritten in place after every mutating UPDATE. See [dns-update-persistent/README.md](dns-update-persistent/README.md). Do not configure `file`, `auto`, `dynupdate`, `secondary`, or `secondary-persistent` for the same origin.
+RFC 2136 dynamic updates for a single zone, persisted to SQLite. See [dns-update-persistent/README.md](dns-update-persistent/README.md). Do not configure `file`, `auto`, `dynupdate`, `secondary`, or `secondary-persistent` for the same origin.
 
 ## ixfr
 

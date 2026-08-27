@@ -1,10 +1,7 @@
 package secondarypersist
 
 import (
-	"errors"
-	"os"
-	"path/filepath"
-	"strings"
+	"sync"
 	"testing"
 
 	"github.com/coredns/coredns/plugin/file"
@@ -13,119 +10,39 @@ import (
 	"github.com/miekg/dns"
 )
 
-func TestWriteAtomicRoundTrip(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "db.example.org")
-	origin := "example.org."
-
-	z := file.NewZone(origin, path)
-	for _, rr := range []dns.RR{
-		test.SOA("example.org. 3600 IN SOA ns.example.org. hostmaster.example.org. 2 7200 3600 1209600 3600"),
-		test.NS("example.org. 3600 IN NS ns.example.org."),
-		test.A("www.example.org. 3600 IN A 192.0.2.1"),
-		test.AAAA("www.example.org. 3600 IN AAAA 2001:db8::1"),
-	} {
-		if err := z.Insert(rr); err != nil {
-			t.Fatalf("insert: %v", err)
-		}
-	}
-
-	snap, ok := snapshotZone(origin, path, z)
-	if !ok {
-		t.Fatal("expected snapshot")
-	}
-	if err := writeAtomic(snap); err != nil {
-		t.Fatalf("writeAtomic: %v", err)
-	}
-
-	loaded, err := loadZone(path, origin)
-	if err != nil {
-		t.Fatalf("loadZone: %v", err)
-	}
-	if zoneSOA(loaded) == nil || zoneSOA(loaded).Serial != 2 {
-		t.Fatalf("expected serial 2, got %+v", zoneSOA(loaded))
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := string(data)
-	if !strings.Contains(text, "secondary-persistent") {
-		t.Fatalf("expected persist comment, got %s", text)
-	}
-	if strings.Contains(text, "$INCLUDE") {
-		t.Fatal("persist file must not contain $INCLUDE")
-	}
+type memStore struct {
+	mu sync.Mutex
+	m  map[string][]dns.RR
 }
 
-func TestLoadZoneRejectsInclude(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "db.example.org")
-	included := filepath.Join(dir, "other")
-	if err := os.WriteFile(included, []byte("www.example.org. 3600 IN A 192.0.2.9\n"), 0o644); err != nil {
-		t.Fatal(err)
+func newMemStore() *memStore { return &memStore{m: map[string][]dns.RR{}} }
+
+func (s *memStore) Save(origin string, rrs []dns.RR) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]dns.RR, len(rrs))
+	for i, rr := range rrs {
+		out[i] = dns.Copy(rr)
 	}
-	body := "example.org. 3600 IN SOA ns.example.org. hostmaster.example.org. 1 7200 3600 1209600 3600\n$INCLUDE " + included + "\n"
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := loadZone(path, "example.org."); err == nil {
-		t.Fatal("expected $INCLUDE to be rejected")
-	}
+	s.m[origin] = out
+	return nil
 }
 
-func TestLoadZoneMissingAndCorrupt(t *testing.T) {
-	dir := t.TempDir()
-	if _, err := loadZone(filepath.Join(dir, "missing"), "example.org."); err == nil {
-		t.Fatal("expected missing file error")
-	}
-
-	path := filepath.Join(dir, "db.example.org")
-	if err := os.WriteFile(path, []byte("www.example.org. 3600 IN A 192.0.2.1\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := loadZone(path, "example.org."); err == nil {
-		t.Fatal("expected SOA-less file to fail")
-	}
+func (s *memStore) Load(origin string) ([]dns.RR, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.m[origin], nil
 }
 
-func TestWriteAtomicLeavesPreviousOnFailure(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "db.example.org")
-	if err := os.WriteFile(path, []byte("old\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	snap := zoneSnapshot{origin: "example.org.", path: path}
-	if err := writeAtomic(snap); err == nil {
-		t.Fatal("expected write of SOA-less snapshot to fail")
-	}
-	got, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != "old\n" {
-		t.Fatalf("expected previous dest to remain, got %q", got)
-	}
-}
-
-func TestPathForDirectory(t *testing.T) {
-	dir := t.TempDir()
-	s := &SecondaryPersist{persistDir: dir}
-	p := s.pathFor("example.org.")
-	if p != filepath.Join(dir, "db.example.org") {
-		t.Fatalf("got %s", p)
-	}
-	if persistFileName("example.org.") != "db.example.org" {
-		t.Fatalf("unexpected file name %s", persistFileName("example.org."))
-	}
+func (s *memStore) Remove(origin string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.m, origin)
+	return nil
 }
 
 func TestLoadIfPresent(t *testing.T) {
-	dir := t.TempDir()
 	origin := "example.org."
-	path := filepath.Join(dir, persistFileName(origin))
 	z := file.NewZone(origin, "stdin")
 	for _, rr := range []dns.RR{
 		test.SOA("example.org. 3600 IN SOA ns.example.org. hostmaster.example.org. 9 7200 3600 1209600 3600"),
@@ -135,14 +52,14 @@ func TestLoadIfPresent(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	snap, _ := snapshotZone(origin, path, z)
-	if err := writeAtomic(snap); err != nil {
+	store := newMemStore()
+	if err := store.Save(origin, dumpRRs(z)); err != nil {
 		t.Fatal(err)
 	}
 
 	dst := file.NewZone(origin, "stdin")
 	s := &SecondaryPersist{
-		persistDir:  dir,
+		records:     store,
 		persistStop: make(chan struct{}),
 		lastSerial:  map[string]uint32{},
 		hasWritten:  map[string]bool{},
@@ -155,11 +72,45 @@ func TestLoadIfPresent(t *testing.T) {
 	}
 }
 
+func TestReloadFromStoreDropsDeletedRecords(t *testing.T) {
+	origin := "example.org."
+	store := newMemStore()
+	if err := store.Save(origin, []dns.RR{
+		test.SOA("example.org. 3600 IN SOA ns.example.org. hostmaster.example.org. 1 7200 3600 1209600 3600"),
+		test.NS("example.org. 3600 IN NS ns.example.org."),
+		test.A("www.example.org. 60 IN A 192.0.2.10"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	z := file.NewZone(origin, "stdin")
+	s := newTestSecondary(t, origin, z, false)
+	s.SetRecordStore(store)
+	s.loadIfPresent(origin, z)
+	if n := len(dumpRRs(z)); n != 3 {
+		t.Fatalf("loaded %d rrs", n)
+	}
+	if err := store.Save(origin, []dns.RR{
+		test.SOA("example.org. 3600 IN SOA ns.example.org. hostmaster.example.org. 2 7200 3600 1209600 3600"),
+		test.NS("example.org. 3600 IN NS ns.example.org."),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.ReloadFromStore(origin)
+	for _, rr := range dumpRRs(z) {
+		if _, ok := rr.(*dns.A); ok {
+			t.Fatalf("deleted A still in memory: %s", rr)
+		}
+	}
+	if soa := zoneSOA(z); soa == nil || soa.Serial != 2 {
+		t.Fatalf("expected serial 2, got %+v", soa)
+	}
+}
+
 func TestLoadIfPresentMissingIsOK(t *testing.T) {
 	origin := "example.org."
 	z := file.NewZone(origin, "stdin")
 	s := &SecondaryPersist{
-		persistDir:  t.TempDir(),
+		records:     newMemStore(),
 		persistStop: make(chan struct{}),
 		lastSerial:  map[string]uint32{},
 		hasWritten:  map[string]bool{},
@@ -168,25 +119,25 @@ func TestLoadIfPresentMissingIsOK(t *testing.T) {
 	}
 	s.loadIfPresent(origin, z)
 	if zoneSOA(z) != nil {
-		t.Fatal("missing persist file should leave zone empty")
+		t.Fatal("missing sqlite zone should leave zone empty")
 	}
 }
 
-func TestRemovePersistFile(t *testing.T) {
-	dir := t.TempDir()
+func TestRemovePersist(t *testing.T) {
 	origin := "example.org."
-	path := filepath.Join(dir, persistFileName(origin))
-	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+	store := newMemStore()
+	soa := test.SOA("example.org. 3600 IN SOA ns.example.org. hostmaster.example.org. 1 7200 3600 1209600 3600")
+	if err := store.Save(origin, []dns.RR{soa}); err != nil {
 		t.Fatal(err)
 	}
 	s := &SecondaryPersist{
-		persistDir: dir,
-		lastSerial: map[string]uint32{path: 1},
-		hasWritten: map[string]bool{path: true},
+		records:    store,
+		lastSerial: map[string]uint32{origin: 1},
+		hasWritten: map[string]bool{origin: true},
 		pending:    map[string]zoneSnapshot{},
 	}
 	s.removePersistFile(origin)
-	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("expected file removed, stat err %v", err)
+	if rrs, _ := store.Load(origin); len(rrs) != 0 {
+		t.Fatalf("expected sqlite zone removed, got %d rrs", len(rrs))
 	}
 }

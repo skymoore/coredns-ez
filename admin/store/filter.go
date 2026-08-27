@@ -21,27 +21,27 @@ var ErrFilterFeedExists = fmt.Errorf("list url already present")
 
 // FilterRule is one domain pattern in the compiled allow or block set.
 type FilterRule struct {
-	ID        string `json:"id"`
-	Action    string `json:"action"`
-	Pattern   string `json:"pattern"`
-	KidsOnly  bool   `json:"kids_only"`
-	Source    string `json:"source"`
-	CreatedAt int64  `json:"created_at"`
+	ID        string `json:"id" gorm:"primaryKey"`
+	Action    string `json:"action" gorm:"uniqueIndex:uidx_filter_rules;not null"`
+	Pattern   string `json:"pattern" gorm:"uniqueIndex:uidx_filter_rules;not null"`
+	KidsOnly  bool   `json:"kids_only" gorm:"column:kids_only;uniqueIndex:uidx_filter_rules;not null;default:0;type:integer"`
+	Source    string `json:"source" gorm:"uniqueIndex:uidx_filter_rules;not null"`
+	CreatedAt int64  `json:"created_at" gorm:"column:created_at;not null;autoCreateTime:false"`
 }
 
 // FilterFeed is a remote list URL that contributes rules.
 type FilterFeed struct {
-	ID              string `json:"id"`
-	Name            string `json:"name"`
-	Action          string `json:"action"`
-	URL             string `json:"url"`
-	Sync            string `json:"sync"`
-	IntervalSeconds int    `json:"interval_seconds"`
-	LastSyncAt      *int64 `json:"last_sync_at,omitempty"`
-	LastError       string `json:"last_error,omitempty"`
-	LastCount       int    `json:"last_count"`
-	ETag            string `json:"etag,omitempty"`
-	CreatedAt       int64  `json:"created_at"`
+	ID              string `json:"id" gorm:"primaryKey"`
+	Name            string `json:"name" gorm:"not null"`
+	Action          string `json:"action" gorm:"uniqueIndex:filter_feeds_action_url;not null"`
+	URL             string `json:"url" gorm:"uniqueIndex:filter_feeds_action_url;not null"`
+	Sync            string `json:"sync" gorm:"not null"`
+	IntervalSeconds int    `json:"interval_seconds" gorm:"column:interval_seconds;not null;default:86400"`
+	LastSyncAt      *int64 `json:"last_sync_at,omitempty" gorm:"column:last_sync_at"`
+	LastError       string `json:"last_error,omitempty" gorm:"column:last_error;not null;default:''"`
+	LastCount       int    `json:"last_count" gorm:"column:last_count;not null;default:0"`
+	ETag            string `json:"etag,omitempty" gorm:"column:etag;not null;default:''"`
+	CreatedAt       int64  `json:"created_at" gorm:"column:created_at;not null;autoCreateTime:false"`
 }
 
 func NormalizeFilterAction(s string) (string, error) {

@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { OwnerNameInput } from "@/components/records/owner-name-input";
+import { SoaFields } from "@/components/records/soa-fields";
 import { ValuesField } from "@/components/records/values-field";
 
 const types = ["A", "AAAA", "CNAME", "MX", "TXT", "NS", "SRV", "CAA", "HTTPS", "SVCB", "PTR"].map((t) => ({
@@ -132,6 +133,7 @@ export function RecordForm({
     [acls.data],
   );
   const title = editing ? "Edit record" : "Add record";
+  const soa = row.type === "SOA";
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       {editing || controlled ? null : (
@@ -156,6 +158,7 @@ export function RecordForm({
               id="owner"
               origin={origin}
               value={row.rel}
+              disabled={soa}
               onChange={(rel) => setRow({ ...row, rel })}
               onBlur={() =>
                 setRow((r) => {
@@ -165,7 +168,9 @@ export function RecordForm({
                 })
               }
             />
-            <p className="text-xs text-muted-foreground">Host relative to this zone. Blank or @ is the apex.</p>
+            <p className="text-xs text-muted-foreground">
+              {soa ? "SOA always lives at the zone apex." : "Host relative to this zone. Blank or @ is the apex."}
+            </p>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-2">
@@ -181,6 +186,7 @@ export function RecordForm({
                 }
                 options={typeOptions}
                 placeholder="Type"
+                disabled={soa}
               />
             </div>
             <div className="space-y-2">
@@ -194,15 +200,19 @@ export function RecordForm({
               />
             </div>
           </div>
-          <ValuesField
-            type={row.type}
-            values={row.values}
-            placeholder={rdataHint[row.type] ?? ""}
-            onChange={(values) => setRow({ ...row, values })}
-          />
+          {soa ? (
+            <SoaFields value={row.values[0] ?? ""} onChange={(rdata) => setRow({ ...row, values: [rdata] })} />
+          ) : (
+            <ValuesField
+              type={row.type}
+              values={row.values}
+              placeholder={rdataHint[row.type] ?? ""}
+              onChange={(values) => setRow({ ...row, values })}
+            />
+          )}
           <div className="space-y-2">
             <Label>ACL</Label>
-            <Select value={row.acl} onValueChange={(acl) => setRow({ ...row, acl })} options={aclOptions} placeholder="ACL" />
+            <Select value={row.acl} onValueChange={(acl) => setRow({ ...row, acl })} options={aclOptions} placeholder="ACL" disabled={soa} />
             <p className="text-xs text-muted-foreground">
               Public is the default zonefile. An ACL writes a second zonefile served only to matching clients.
             </p>

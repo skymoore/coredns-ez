@@ -1,13 +1,6 @@
 package secondarypersist
 
 import (
-	"errors"
-	"fmt"
-	"io"
-	"io/fs"
-	"os"
-	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/coredns/coredns/plugin/file"
@@ -16,87 +9,66 @@ import (
 	"github.com/miekg/dns"
 )
 
+// RecordStore is the SQLite persist backend.
+type RecordStore interface {
+	Save(origin string, rrs []dns.RR) error
+	Load(origin string) ([]dns.RR, error)
+	Remove(origin string) error
+}
+
 type zoneSnapshot struct {
 	origin string
-	path   string
 	apex   file.Apex
 	tree   *tree.Tree
 	serial uint32
 }
 
-func persistFileName(origin string) string {
-	return "db." + strings.TrimSuffix(origin, ".")
-}
-
-func (s *SecondaryPersist) pathFor(origin string) string {
-	if p, ok := s.persistPaths[origin]; ok {
-		return p
-	}
-	if s.persistDir == "" {
-		return ""
-	}
-	name := persistFileName(origin)
-	p := filepath.Join(s.persistDir, name)
-	rel, err := filepath.Rel(s.persistDir, p)
-	if err != nil || strings.HasPrefix(rel, "..") {
-		return ""
-	}
-	return p
-}
-
 func (s *SecondaryPersist) loadIfPresent(origin string, z *file.Zone) {
-	path := s.pathFor(origin)
-	if path == "" {
+	if s.records == nil {
+		loadCount.WithLabelValues(origin, "missing").Inc()
 		return
 	}
-	loaded, err := loadZone(path, origin)
+	rrs, err := s.records.Load(origin)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			loadCount.WithLabelValues(origin, "missing").Inc()
-			log.Debugf("No persist file for %s at %s", origin, path)
-			return
-		}
 		loadCount.WithLabelValues(origin, "error").Inc()
-		log.Warningf("Failed to load persist file %q for %s: %s", path, origin, err)
+		log.Warningf("Failed to load sqlite zone %s: %s", origin, err)
+		return
+	}
+	if soaOfRRs(rrs) == nil {
+		loadCount.WithLabelValues(origin, "missing").Inc()
+		return
+	}
+	loaded, err := zoneFromRRs(origin, rrs)
+	if err != nil {
+		loadCount.WithLabelValues(origin, "error").Inc()
+		log.Warningf("Failed to install sqlite zone %s: %s", origin, err)
 		return
 	}
 	installZoneData(z, loaded)
 	if soa := zoneSOA(loaded); soa != nil {
-		s.markWritten(path, soa.Serial)
-		log.Infof("Loaded persisted zone %s from %s with %d SOA serial", origin, path, soa.Serial)
+		s.markWritten(origin, soa.Serial)
+		log.Infof("Loaded persisted zone %s from sqlite serial=%d", origin, soa.Serial)
 	}
 	loadCount.WithLabelValues(origin, "ok").Inc()
 }
 
-func loadZone(path, origin string) (*file.Zone, error) {
-	f, err := os.Open(filepath.Clean(path))
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	return parseZone(f, origin, path)
-}
-
-func parseZone(r io.Reader, origin, fileName string) (*file.Zone, error) {
-	zp := dns.NewZoneParser(r, dns.Fqdn(origin), fileName)
-	zp.SetIncludeAllowed(false)
-	z := file.NewZone(origin, fileName)
-	seenSOA := false
-	for rr, ok := zp.Next(); ok; rr, ok = zp.Next() {
-		if _, isSOA := rr.(*dns.SOA); isSOA {
-			seenSOA = true
-		}
-		if err := z.Insert(rr); err != nil {
+func zoneFromRRs(origin string, rrs []dns.RR) (*file.Zone, error) {
+	z := file.NewZone(origin, "sqlite")
+	for _, rr := range rrs {
+		if err := z.Insert(dns.Copy(rr)); err != nil {
 			return nil, err
 		}
 	}
-	if err := zp.Err(); err != nil {
-		return nil, fmt.Errorf("failed to parse file %q for origin %s: %w", fileName, origin, err)
-	}
-	if !seenSOA {
-		return nil, fmt.Errorf("file %q has no SOA record for origin %s", fileName, origin)
-	}
 	return z, nil
+}
+
+func soaOfRRs(rrs []dns.RR) *dns.SOA {
+	for _, rr := range rrs {
+		if soa, ok := rr.(*dns.SOA); ok {
+			return soa
+		}
+	}
+	return nil
 }
 
 func installZoneData(dst, src *file.Zone) {
@@ -148,7 +120,7 @@ func dumpRRsLocked(ap file.Apex, tr *tree.Tree) []dns.RR {
 	return rrs
 }
 
-func snapshotZone(origin, path string, z *file.Zone) (zoneSnapshot, bool) {
+func snapshotZone(origin string, z *file.Zone) (zoneSnapshot, bool) {
 	z.RLock()
 	defer z.RUnlock()
 	if z.SOA == nil {
@@ -156,7 +128,6 @@ func snapshotZone(origin, path string, z *file.Zone) (zoneSnapshot, bool) {
 	}
 	return zoneSnapshot{
 		origin: origin,
-		path:   path,
 		apex:   z.Apex,
 		tree:   z.Tree,
 		serial: z.SOA.Serial,
@@ -164,11 +135,10 @@ func snapshotZone(origin, path string, z *file.Zone) (zoneSnapshot, bool) {
 }
 
 func (s *SecondaryPersist) persistAsync(origin string, z *file.Zone) {
-	path := s.pathFor(origin)
-	if path == "" {
+	if s.records == nil {
 		return
 	}
-	snap, ok := snapshotZone(origin, path, z)
+	snap, ok := snapshotZone(origin, z)
 	if !ok {
 		return
 	}
@@ -179,14 +149,15 @@ func (s *SecondaryPersist) enqueuePersist(snap zoneSnapshot) {
 	s.persistMu.Lock()
 	defer s.persistMu.Unlock()
 
-	if s.hasWritten[snap.path] && s.lastSerial[snap.path] == snap.serial {
+	key := snap.origin
+	if s.hasWritten[key] && s.lastSerial[key] == snap.serial {
 		return
 	}
-	if s.writing[snap.path] {
-		s.pending[snap.path] = snap
+	if s.writing[key] {
+		s.pending[key] = snap
 		return
 	}
-	s.writing[snap.path] = true
+	s.writing[key] = true
 	s.persistWg.Add(1)
 	go func() {
 		defer s.persistWg.Done()
@@ -200,37 +171,53 @@ func (s *SecondaryPersist) closePersist() {
 }
 
 func (s *SecondaryPersist) runPersist(snap zoneSnapshot) {
+	key := snap.origin
 	select {
 	case <-s.persistStop:
 		s.persistMu.Lock()
-		s.writing[snap.path] = false
-		delete(s.pending, snap.path)
+		s.writing[key] = false
+		delete(s.pending, key)
 		s.persistMu.Unlock()
 		return
 	default:
 	}
 
+	s.persistMu.Lock()
+	stale := s.hasWritten[key] && !less(s.lastSerial[key], snap.serial)
+	s.persistMu.Unlock()
+	if stale {
+		s.finishPersist(key)
+		return
+	}
+
 	start := time.Now()
-	err := writeAtomic(snap)
+	err := s.records.Save(snap.origin, dumpRRsLocked(snap.apex, snap.tree))
 	writeDuration.WithLabelValues(snap.origin).Observe(time.Since(start).Seconds())
 
 	s.persistMu.Lock()
-	s.writing[snap.path] = false
+	s.writing[key] = false
 	if err != nil {
 		writeCount.WithLabelValues(snap.origin, "error").Inc()
-		log.Errorf("Failed to persist zone %s to %s: %s", snap.origin, snap.path, err)
+		log.Errorf("Failed to persist zone %s: %s", snap.origin, err)
 	} else {
-		s.hasWritten[snap.path] = true
-		s.lastSerial[snap.path] = snap.serial
+		s.hasWritten[key] = true
+		s.lastSerial[key] = snap.serial
 		serialGauge.WithLabelValues(snap.origin).Set(float64(snap.serial))
 		writeCount.WithLabelValues(snap.origin, "ok").Inc()
-		log.Infof("Persisted zone %s to %s with %d SOA serial", snap.origin, snap.path, snap.serial)
+		log.Infof("Persisted zone %s serial=%d", snap.origin, snap.serial)
 	}
-	pending, ok := s.pending[snap.path]
+	s.persistMu.Unlock()
+	s.finishPersist(key)
+}
+
+func (s *SecondaryPersist) finishPersist(key string) {
+	s.persistMu.Lock()
+	s.writing[key] = false
+	pending, ok := s.pending[key]
 	if ok {
-		delete(s.pending, snap.path)
-		if !s.hasWritten[snap.path] || s.lastSerial[snap.path] != pending.serial {
-			s.writing[snap.path] = true
+		delete(s.pending, key)
+		if !s.hasWritten[key] || less(s.lastSerial[key], pending.serial) {
+			s.writing[key] = true
 			s.persistWg.Add(1)
 			s.persistMu.Unlock()
 			go func() {
@@ -243,119 +230,22 @@ func (s *SecondaryPersist) runPersist(snap zoneSnapshot) {
 	s.persistMu.Unlock()
 }
 
-func (s *SecondaryPersist) markWritten(path string, serial uint32) {
+func (s *SecondaryPersist) markWritten(origin string, serial uint32) {
 	s.persistMu.Lock()
-	s.hasWritten[path] = true
-	s.lastSerial[path] = serial
+	s.hasWritten[origin] = true
+	s.lastSerial[origin] = serial
 	s.persistMu.Unlock()
 }
 
 func (s *SecondaryPersist) removePersistFile(origin string) {
-	path := s.pathFor(origin)
-	if path == "" {
-		return
-	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		log.Warningf("Failed to remove persist file %q for %s: %s", path, origin, err)
+	if s.records != nil {
+		if err := s.records.Remove(origin); err != nil {
+			log.Warningf("Failed to remove sqlite zone %s: %s", origin, err)
+		}
 	}
 	s.persistMu.Lock()
-	delete(s.hasWritten, path)
-	delete(s.lastSerial, path)
-	delete(s.pending, path)
+	delete(s.hasWritten, origin)
+	delete(s.lastSerial, origin)
+	delete(s.pending, origin)
 	s.persistMu.Unlock()
-}
-
-func writeAtomic(snap zoneSnapshot) error {
-	if snap.apex.SOA == nil {
-		return fmt.Errorf("no SOA")
-	}
-	dir := filepath.Dir(snap.path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	f, err := os.CreateTemp(dir, ".persist-*")
-	if err != nil {
-		return err
-	}
-	tmp := f.Name()
-	cleanup := true
-	defer func() {
-		if cleanup {
-			_ = os.Remove(tmp)
-		}
-	}()
-
-	if err := writeSnapshot(f, snap); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Chmod(0o644); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, snap.path); err != nil {
-		return err
-	}
-	cleanup = false
-	return syncDir(dir)
-}
-
-func writeSnapshot(w io.Writer, snap zoneSnapshot) error {
-	header := fmt.Sprintf("; persisted by coredns secondary-persistent origin=%s serial=%d\n", snap.origin, snap.serial)
-	if _, err := io.WriteString(w, header); err != nil {
-		return err
-	}
-	if err := writeRR(w, snap.apex.SOA); err != nil {
-		return err
-	}
-	for _, rr := range snap.apex.SIGSOA {
-		if err := writeRR(w, rr); err != nil {
-			return err
-		}
-	}
-	for _, rr := range snap.apex.NS {
-		if err := writeRR(w, rr); err != nil {
-			return err
-		}
-	}
-	for _, rr := range snap.apex.SIGNS {
-		if err := writeRR(w, rr); err != nil {
-			return err
-		}
-	}
-	if snap.tree == nil {
-		return nil
-	}
-	return snap.tree.Walk(func(e *tree.Elem, _ map[uint16][]dns.RR) error {
-		for _, rr := range e.All() {
-			if err := writeRR(w, rr); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-}
-
-func writeRR(w io.Writer, rr dns.RR) error {
-	if _, err := io.WriteString(w, rr.String()); err != nil {
-		return err
-	}
-	_, err := w.Write([]byte("\n"))
-	return err
-}
-
-func syncDir(dir string) error {
-	d, err := os.Open(dir)
-	if err != nil {
-		return err
-	}
-	defer d.Close()
-	return d.Sync()
 }

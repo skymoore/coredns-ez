@@ -11,17 +11,19 @@ import (
 var aclNameRe = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 
 type ACL struct {
-	ID        string   `json:"id"`
-	Name      string   `json:"name"`
-	Networks  []string `json:"networks"`
-	Position  int      `json:"position"`
-	CreatedAt int64    `json:"created_at"`
+	ID         string   `json:"id" gorm:"primaryKey"`
+	Name       string   `json:"name" gorm:"uniqueIndex;not null"`
+	Networks   []string `json:"networks" gorm:"-"`
+	NetworkCSV string   `json:"-" gorm:"column:networks;type:text;not null"`
+	Position   int      `json:"position" gorm:"not null"`
+	CreatedAt  int64    `json:"created_at" gorm:"column:created_at;not null;autoCreateTime:false"`
 }
 
 type ZoneView struct {
-	Origin string `json:"origin"`
-	ACL    string `json:"acl"`
-	Path   string `json:"path"`
+	Origin string `json:"origin" gorm:"primaryKey"`
+	ACL    string `json:"acl" gorm:"primaryKey"`
+	Path   string `json:"path,omitempty" gorm:"column:persist_path;not null;default:''"`
+	Data   []byte `json:"data,omitempty" gorm:"-"`
 }
 
 func ValidACLName(name string) error {
@@ -36,10 +38,7 @@ func ValidACLName(name string) error {
 	return nil
 }
 
-func NormalizeNetworks(in []string) ([]string, error) {
-	if len(in) == 0 {
-		return nil, fmt.Errorf("at least one network is required")
-	}
+func NormalizeCIDRs(in []string) ([]string, error) {
 	out := make([]string, 0, len(in))
 	seen := map[string]bool{}
 	for _, raw := range in {
@@ -66,6 +65,17 @@ func NormalizeNetworks(in []string) ([]string, error) {
 		}
 		seen[s] = true
 		out = append(out, s)
+	}
+	if out == nil {
+		out = []string{}
+	}
+	return out, nil
+}
+
+func NormalizeNetworks(in []string) ([]string, error) {
+	out, err := NormalizeCIDRs(in)
+	if err != nil {
+		return nil, err
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("at least one network is required")
@@ -184,6 +194,10 @@ func (s *Store) UpdateACL(name string, newName string, networks []string, positi
 			return ACL{}, err
 		}
 		_, err = s.db.Exec(`UPDATE zone_views SET acl = ? WHERE acl = ?`, rename, strings.ToLower(name))
+		if err != nil {
+			return cur, err
+		}
+		_, err = s.db.Exec(`UPDATE records SET view = ? WHERE view = ?`, rename, strings.ToLower(name))
 		return cur, err
 	}
 	_, err = s.db.Exec(`UPDATE acls SET networks = ?, position = ? WHERE id = ?`,
@@ -271,6 +285,9 @@ func (s *Store) DeleteZoneViewsForACL(acl string) ([]ZoneView, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, err = s.db.Exec(`DELETE FROM records WHERE view = ?`, acl); err != nil {
+		return gone, err
+	}
 	_, err = s.db.Exec(`DELETE FROM zone_views WHERE acl = ?`, acl)
 	return gone, err
 }

@@ -20,12 +20,7 @@ func (a *Admin) maybeProxy(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		// Login, OIDC, cluster apply, backup, and self-update stay on this node.
-		if strings.HasPrefix(r.URL.Path, "/api/v1/auth/") ||
-			strings.HasPrefix(r.URL.Path, "/api/v1/cluster/snapshot") ||
-			strings.HasPrefix(r.URL.Path, "/api/v1/cluster/connect") ||
-			strings.HasPrefix(r.URL.Path, "/api/v1/backup") ||
-			strings.HasPrefix(r.URL.Path, "/api/v1/update") {
+		if stayOnSecondary(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -58,4 +53,21 @@ func (a *Admin) maybeProxy(next http.Handler) http.Handler {
 		w.WriteHeader(resp.StatusCode)
 		_, _ = io.Copy(w, resp.Body)
 	})
+}
+
+func stayOnSecondary(path string) bool {
+	if strings.HasPrefix(path, "/api/v1/auth/") ||
+		strings.HasPrefix(path, "/api/v1/cluster/snapshot") ||
+		strings.HasPrefix(path, "/api/v1/cluster/connect") ||
+		strings.HasPrefix(path, "/api/v1/cluster/primary-dns") ||
+		strings.HasPrefix(path, "/api/v1/backup") ||
+		strings.HasPrefix(path, "/api/v1/update") {
+		return true
+	}
+	// Force AXFR/IXFR on this node. The primary's copy of the zone is a
+	// primary, so proxying POST .../transfer yields "not a secondary".
+	if strings.HasPrefix(path, "/api/v1/zones/") && strings.HasSuffix(path, "/transfer") {
+		return true
+	}
+	return false
 }

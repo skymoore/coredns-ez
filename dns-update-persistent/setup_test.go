@@ -40,9 +40,6 @@ func TestParse(t *testing.T) {
 				if d.mutable != nil {
 					t.Error("mutable set without a `mutable` directive")
 				}
-				if d.seedPath != seed {
-					t.Errorf("seedPath = %q, want %q", d.seedPath, seed)
-				}
 			},
 		},
 		{
@@ -77,7 +74,7 @@ func TestParse(t *testing.T) {
 		{
 			name:    "seed file is required",
 			input:   "dns-update-persistent {\n}",
-			wantErr: "seed zone is required",
+			wantErr: "file` seed is required",
 		},
 		{
 			name:    "two zones in one block",
@@ -140,9 +137,8 @@ func TestParseJoinsRelativePathWithRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	want := filepath.Join(dir, "db.example.org")
-	if d.seedPath != want {
-		t.Errorf("seedPath = %q, want %q", d.seedPath, want)
+	if soaOf(d.rrs) == nil {
+		t.Fatal("relative file path was not loaded")
 	}
 }
 

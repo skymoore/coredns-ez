@@ -2,6 +2,7 @@ package dnsupdatepersist
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,7 +55,7 @@ func setup(c *caddy.Controller) error {
 		if h := dnsserver.GetConfig(c).Handler("ixfr"); h != nil {
 			if x, ok := h.(*ixfr.IXFR); ok {
 				d.ixfr = x
-				if err := x.Register(d.Zone, d.seedPath+".ixfr", d.rrs); err != nil {
+				if err := x.Register(d.Zone, d.rrs); err != nil {
 					log.Warningf("ixfr register %s: %v", d.Zone, err)
 				}
 			}
@@ -130,7 +131,7 @@ func parse(c *caddy.Controller) (*UpdatePersist, error) {
 	}
 
 	if seed == "" {
-		return nil, c.Err("a `file` seed zone is required: an UPDATE is applied to a zone, and a zone without an SOA cannot have its serial advanced or be transferred")
+		return nil, c.Err("a `file` seed is required to load the zone once; mutations persist to SQLite via admin, not back to that file")
 	}
 
 	config := dnsserver.GetConfig(c)
@@ -146,8 +147,6 @@ func parse(c *caddy.Controller) (*UpdatePersist, error) {
 		return nil, fmt.Errorf("%s has no SOA at %s", seed, origin)
 	}
 	d.rrs = rrs
-	d.seedPath = seed
-
 	return d, nil
 }
 
@@ -185,7 +184,18 @@ func readZone(path, origin string) ([]dns.RR, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", path, err)
 	}
+	return zoneRRs(z), nil
+}
 
+func readZoneReader(r io.Reader, origin string) ([]dns.RR, error) {
+	z, err := file.Parse(r, origin, "stdin", 0)
+	if err != nil {
+		return nil, err
+	}
+	return zoneRRs(z), nil
+}
+
+func zoneRRs(z *file.Zone) []dns.RR {
 	var rrs []dns.RR
 	if z.SOA != nil {
 		rrs = append(rrs, z.SOA)
@@ -196,5 +206,5 @@ func readZone(path, origin string) ([]dns.RR, error) {
 	for _, e := range z.All() {
 		rrs = append(rrs, e.All()...)
 	}
-	return rrs, nil
+	return rrs
 }

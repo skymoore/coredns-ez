@@ -27,8 +27,7 @@ type SecondaryPersist struct {
 	catalogZones       map[string]plugin.Zones
 	catalogMemberZones map[string]map[string]struct{}
 
-	persistPaths map[string]string
-	persistDir   string
+	records RecordStore
 
 	persistMu       sync.Mutex
 	lastSerial      map[string]uint32

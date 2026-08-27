@@ -21,9 +21,9 @@ SOA(new)
 
 Without this plugin in the server block, *dns-update-persistent* keeps the in-tree fallback so existing Corefiles still boot.
 
-The journal is rewritten atomically next to the zone file (`PATH.ixfr` by default) after each mutating UPDATE. The zone file is still the source of truth: on load, increments that do not chain to the loaded SOA are dropped. A missing or corrupt journal is not fatal — IXFR history is empty until the next UPDATE (secondaries get AXFR fallback).
+The journal is stored in SQLite (`ixfr_journals`) after each mutating UPDATE. On load, increments that do not chain to the current SOA are dropped. A missing or corrupt journal is not fatal — IXFR history is empty until the next UPDATE (secondaries get AXFR fallback).
 
-`history N` (default 64) bounds memory and the file. A secondary older than the oldest retained serial gets AXFR fallback, which RFC 1995 allows.
+`history N` (default 64) bounds retained increments. A secondary older than the oldest retained serial gets AXFR fallback, which RFC 1995 allows.
 
 This plugin does not answer queries. Place it in the same server block as *dns-update-persistent* and *transfer*.
 
@@ -38,7 +38,7 @@ ixfr [ZONE] {
 
 * **ZONE** defaults to the server block. Exactly one.
 * `history` **N** generations to retain. Default 64. Must be ≥ 1.
-* `file` **PATH** journal location. Default is the zone file plus `.ixfr`. Relative paths are joined with *root*.
+* `file` **PATH** accepted and ignored. Journals persist in SQLite.
 
 ## Compilation
 

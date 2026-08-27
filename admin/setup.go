@@ -20,7 +20,10 @@ import (
 	dnsupdatepersist "github.com/skymoore/coredns-ez/dns-update-persistent"
 )
 
-func init() { plugin.Register(pluginName, setup) }
+func init() {
+	plugin.Register(pluginName, setup)
+	plugin.Register("qstat", setupQstat)
+}
 
 var (
 	instanceMu sync.Mutex
@@ -59,6 +62,9 @@ func setup(c *caddy.Controller) error {
 
 	registerTransferStartup(c, a)
 	c.OnStartup(func() error {
+		if err := a.importCorefileZones(); err != nil {
+			log.Warningf("zonefile import: %v", err)
+		}
 		return a.loadPersistedZones()
 	})
 	c.OnShutdown(func() error {
@@ -240,7 +246,12 @@ func newAdmin(cfg coreConfig) (*Admin, error) {
 		}
 	}
 
+	if err := db.EnsureRecursion(); err != nil {
+		log.Warningf("recursion allow-list: %v", err)
+	}
+
 	a.mux = a.routes()
+	go a.queryFlushLoop()
 
 	if cfg.Role == rolePrimary {
 		if err := a.ensureSelfMember(""); err != nil {
@@ -253,7 +264,7 @@ func newAdmin(cfg coreConfig) (*Admin, error) {
 		cluster, _ := db.Meta(store.MetaClusterID)
 		if cluster == "" && cfg.JoinURL != "" && cfg.JoinToken != "" {
 			name, _ := os.Hostname()
-			if err := a.joinPrimary(cfg.JoinURL, cfg.JoinToken, name, cfg.AdvertiseDNS, ""); err != nil {
+			if err := a.joinPrimary(cfg.JoinURL, cfg.JoinToken, name, cfg.AdvertiseDNS, "", ""); err != nil {
 				_ = db.Close()
 				return nil, fmt.Errorf("join: %w", err)
 			}

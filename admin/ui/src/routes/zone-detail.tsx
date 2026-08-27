@@ -8,6 +8,7 @@ import { PageHeader } from "@/components/shell/page-header";
 import { StatusChip } from "@/components/shell/status-chip";
 import { RecordForm } from "@/components/records/record-form";
 import { RecordTable } from "@/components/records/record-table";
+import { DnssecCard } from "@/components/zones/dnssec-card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ConfirmDialog } from "@/components/shell/confirm-dialog";
@@ -60,6 +61,7 @@ export function ZoneDetailPage({ me }: { me: Actor }) {
         actions={
           <>
             <StatusChip kind={zone.data?.kind} source={zone.data?.source} />
+            {zone.data?.dnssec ? <StatusChip kind="signed" /> : null}
             {canWrite && zone.data?.kind === "primary" ? (
               <Button variant="outline" onClick={() => notify.mutate()}>
                 Notify
@@ -79,6 +81,7 @@ export function ZoneDetailPage({ me }: { me: Actor }) {
           </>
         }
       />
+      <DnssecCard origin={origin} canWrite={canWrite} />
       {recs.data ? (
         <RecordTable origin={origin} records={recs.data.records} canWrite={canWrite} />
       ) : (

@@ -1,73 +1,151 @@
-import { useEffect, useRef, useState } from "react";
-import { rateFromDelta, sumBy } from "@/lib/metrics";
-import type { MetricsSnapshot } from "@/lib/types";
+import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import type { QueryRangeId, QuerySeriesPoint } from "@/lib/types";
 import { formatNumber } from "@/lib/format";
 
-type Point = { t: string; qps: number; nxdomain: number };
+const TYPE_COLORS: Record<string, string> = {
+  A: "#5F259F",
+  AAAA: "#2563eb",
+  HTTPS: "#0d9488",
+  SVCB: "#0f766e",
+  TXT: "#ca8a04",
+  MX: "#ea580c",
+  NS: "#7c3aed",
+  SOA: "#db2777",
+  CNAME: "#65a30d",
+  PTR: "#4f46e5",
+  SRV: "#c026d3",
+  DNSKEY: "#0891b2",
+  DS: "#0369a1",
+  ANY: "#57534e",
+  Other: "#64748b",
+};
 
-function Spark({ values, color }: { values: number[]; color: string }) {
-  const w = 640;
-  const h = 140;
-  const max = Math.max(1, ...values);
-  const pts = values
-    .map((v, i) => {
-      const x = values.length <= 1 ? 0 : (i / (values.length - 1)) * w;
-      const y = h - (v / max) * (h - 8) - 4;
-      return `${x},${y}`;
-    })
-    .join(" ");
-  return (
-    <svg viewBox={`0 0 ${w} ${h}`} className="h-36 w-full" role="img" aria-label="Query rate">
-      <polyline fill="none" stroke={color} strokeWidth="2.5" points={pts} />
-    </svg>
-  );
+const FALLBACK = ["#8246AF", "#b45309", "#be185d", "#15803d", "#1d4ed8", "#9333ea"];
+
+const RANGES: { id: QueryRangeId; label: string }[] = [
+  { id: "5m", label: "5 min" },
+  { id: "15m", label: "15 min" },
+  { id: "1h", label: "1 hour" },
+  { id: "6h", label: "6 hours" },
+  { id: "24h", label: "24 hours" },
+  { id: "7d", label: "7 days" },
+];
+
+function colorFor(type: string, i: number): string {
+  return TYPE_COLORS[type] ?? FALLBACK[i % FALLBACK.length];
 }
 
-export function QpsChart({ snapshot }: { snapshot?: MetricsSnapshot }) {
-  const prev = useRef<{ at: number; req: number; nx: number } | null>(null);
-  const [data, setData] = useState<Point[]>([]);
-
-  useEffect(() => {
-    if (!snapshot) return;
-    const req = sumBy(snapshot.series, "coredns_dns_requests_total");
-    const nx = sumBy(
-      snapshot.series,
-      "coredns_dns_responses_total",
-      (p) => p.labels?.rcode === "NXDOMAIN",
-    );
-    const last = prev.current;
-    prev.current = { at: snapshot.scraped_at, req, nx };
-    if (!last) return;
-    const dt = snapshot.scraped_at - last.at;
-    const qps = rateFromDelta(last.req, req, dt);
-    const nxps = rateFromDelta(last.nx, nx, dt);
-    setData((d) =>
-      [...d, { t: new Date(snapshot.scraped_at * 1000).toLocaleTimeString(), qps, nxdomain: nxps }].slice(-40),
-    );
-  }, [snapshot]);
-
-  if (!snapshot) {
-    return <div className="h-56 rounded-lg border border-border bg-card" />;
+function formatTick(t: number, range: QueryRangeId): string {
+  const d = new Date(t * 1000);
+  if (range === "7d") {
+    return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
   }
-  const hasDns = snapshot.series.some((s) => s.name === "coredns_dns_requests_total");
-  if (!hasDns) {
-    return (
-      <div className="flex h-56 items-end rounded-lg border border-dashed border-border px-4 py-3 text-sm text-muted-foreground">
-        No DNS request series yet. Add the prometheus plugin to a server block to record QPS. API
-        gauges still update below.
-      </div>
-    );
+  if (range === "24h" || range === "6h") {
+    return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
   }
-  const latest = data[data.length - 1];
+  return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function buildLines(series: QuerySeriesPoint[], step: number) {
+  const totals = new Map<string, number>();
+  for (const p of series) {
+    for (const [k, v] of Object.entries(p.types ?? {})) {
+      totals.set(k, (totals.get(k) ?? 0) + v);
+    }
+  }
+  const ranked = [...totals.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  const keep = ranked.slice(0, 8).map(([k]) => k);
+  const keepSet = new Set(keep);
+  const other = ranked.length > 8;
+  const keys = other ? [...keep, "Other"] : keep;
+  const denom = step > 0 ? step : 1;
+  const data = series.map((p) => {
+    const row: Record<string, number> = { t: p.t };
+    let rest = 0;
+    for (const [k, v] of Object.entries(p.types ?? {})) {
+      const qps = v / denom;
+      if (keepSet.has(k)) row[k] = qps;
+      else rest += qps;
+    }
+    for (const k of keep) {
+      if (row[k] == null) row[k] = 0;
+    }
+    if (other) row.Other = rest;
+    return row;
+  });
+  return { keys, data };
+}
+
+export function QpsChart({
+  series,
+  stepSeconds,
+  rangeId,
+  qps,
+}: {
+  series: QuerySeriesPoint[];
+  stepSeconds: number;
+  rangeId: QueryRangeId;
+  qps: number;
+}) {
+  const { keys, data } = buildLines(series, stepSeconds);
+  const rangeLabel = RANGES.find((r) => r.id === rangeId)?.label ?? rangeId;
+  const has = keys.length > 0 && data.some((d) => keys.some((k) => (d[k] ?? 0) > 0));
   return (
-    <div className="rounded-lg border border-border bg-card p-3">
-      <div className="mb-1 flex items-baseline justify-between">
-        <div className="text-sm font-medium">Query rate</div>
-        <div className="tabular text-sm text-muted-foreground">
-          {latest ? `${formatNumber(latest.qps)} QPS` : "waiting for samples"}
+    <div className="rounded-lg border border-border bg-card p-4">
+      <div className="mb-3 flex flex-wrap items-baseline justify-between gap-3">
+        <div>
+          <div className="text-sm font-medium">Queries by type</div>
+          <p className="text-xs text-muted-foreground">
+            Rate per second over the last {rangeLabel.toLowerCase()}. One line per query type.
+          </p>
         </div>
+        <div className="tabular text-sm text-muted-foreground">{formatNumber(qps)} QPS avg</div>
       </div>
-      <Spark values={data.map((d) => d.qps)} color="#5F259F" />
+      <div className="h-72">
+        {!has ? (
+          <div className="flex h-full items-center text-sm text-muted-foreground">
+            Waiting for DNS queries on this node…
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={data} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+              <XAxis
+                dataKey="t"
+                tickFormatter={(v) => formatTick(Number(v), rangeId)}
+                tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+                minTickGap={28}
+              />
+              <YAxis tick={{ fontSize: 11, fill: "var(--muted-foreground)" }} width={44} allowDecimals />
+              <Tooltip
+                labelFormatter={(v) => formatTick(Number(v), rangeId)}
+                formatter={(value, name) => [formatNumber(Number(value)), String(name)]}
+                contentStyle={{
+                  background: "var(--popover)",
+                  border: "1px solid var(--border)",
+                  borderRadius: 8,
+                  fontSize: 12,
+                }}
+              />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              {keys.map((k, i) => (
+                <Line
+                  key={k}
+                  type="monotone"
+                  dataKey={k}
+                  name={k}
+                  stroke={colorFor(k, i)}
+                  strokeWidth={2}
+                  dot={false}
+                  isAnimationActive={false}
+                />
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
+        )}
+      </div>
     </div>
   );
 }
+
+export { RANGES };

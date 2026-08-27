@@ -10,125 +10,10 @@ import (
 	"sync"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
-
-const schema = `
-CREATE TABLE IF NOT EXISTS meta (
-  k TEXT PRIMARY KEY,
-  v TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS users (
-  id TEXT PRIMARY KEY,
-  username TEXT NOT NULL UNIQUE,
-  password_hash TEXT NOT NULL,
-  role TEXT NOT NULL,
-  disabled INTEGER NOT NULL DEFAULT 0,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS api_tokens (
-  id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
-  token_hash TEXT NOT NULL UNIQUE,
-  prefix TEXT NOT NULL,
-  role TEXT NOT NULL,
-  expires_at INTEGER,
-  created_at INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS oidc_config (
-  id INTEGER PRIMARY KEY CHECK (id = 1),
-  issuer TEXT NOT NULL,
-  client_id TEXT NOT NULL,
-  client_secret TEXT NOT NULL,
-  redirect_url TEXT NOT NULL,
-  button_text TEXT NOT NULL DEFAULT '',
-  button_image TEXT NOT NULL DEFAULT ''
-);
-CREATE TABLE IF NOT EXISTS oidc_state (
-  state TEXT PRIMARY KEY,
-  nonce TEXT NOT NULL,
-  expires_at INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS cluster_members (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  api_url TEXT NOT NULL,
-  dns_addr TEXT NOT NULL,
-  secret_hash TEXT NOT NULL,
-  role TEXT NOT NULL DEFAULT 'secondary',
-  joined_at INTEGER NOT NULL,
-  last_seen INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS join_tokens (
-  id TEXT PRIMARY KEY,
-  token_hash TEXT NOT NULL UNIQUE,
-  expires_at INTEGER NOT NULL,
-  used_at INTEGER
-);
-CREATE TABLE IF NOT EXISTS zones (
-  origin TEXT PRIMARY KEY,
-  kind TEXT NOT NULL,
-  source TEXT NOT NULL,
-  persist_path TEXT NOT NULL,
-  transfer_from TEXT,
-  transfer_to TEXT,
-  mutable TEXT,
-  created_at INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS audit (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  at INTEGER NOT NULL,
-  actor TEXT NOT NULL,
-  action TEXT NOT NULL,
-  origin TEXT,
-  detail TEXT
-);
-CREATE TABLE IF NOT EXISTS acls (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL UNIQUE,
-  networks TEXT NOT NULL,
-  position INTEGER NOT NULL,
-  created_at INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS zone_views (
-  origin TEXT NOT NULL,
-  acl TEXT NOT NULL,
-  persist_path TEXT NOT NULL,
-  PRIMARY KEY (origin, acl)
-);
-CREATE TABLE IF NOT EXISTS tsig_keys (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL UNIQUE,
-  algorithm TEXT NOT NULL,
-  secret TEXT NOT NULL,
-  created_at INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS filter_feeds (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  action TEXT NOT NULL,
-  url TEXT NOT NULL,
-  sync TEXT NOT NULL,
-  interval_seconds INTEGER NOT NULL DEFAULT 86400,
-  last_sync_at INTEGER,
-  last_error TEXT NOT NULL DEFAULT '',
-  last_count INTEGER NOT NULL DEFAULT 0,
-  etag TEXT NOT NULL DEFAULT '',
-  created_at INTEGER NOT NULL
-);
-CREATE UNIQUE INDEX IF NOT EXISTS filter_feeds_action_url ON filter_feeds(action, url);
-CREATE TABLE IF NOT EXISTS filter_rules (
-  id TEXT PRIMARY KEY,
-  action TEXT NOT NULL,
-  pattern TEXT NOT NULL,
-  kids_only INTEGER NOT NULL DEFAULT 0,
-  source TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  UNIQUE(action, pattern, kids_only, source)
-);
-`
 
 const (
 	RoleAdmin    = "admin"
@@ -145,16 +30,19 @@ const (
 	MetaMemberID     = "member_id"
 	MetaGeneration   = "snapshot_generation"
 	MetaTransferTo   = "transfer_to"
+	MetaRecursion    = "recursion_nets"
 	MetaPassword     = "password"
 	MetaCorefileHash = "corefile_hash"
 	MetaNodeName     = "node_name"
+	MetaPrimaryDNS   = "primary_dns"
 
 	MemberPrimary   = "primary"
 	MemberSecondary = "secondary"
 )
 
-// Store is the SQLite identity and inventory database.
+// Store is the SQLite identity, zone, and record database.
 type Store struct {
+	gdb  *gorm.DB
 	db   *sql.DB
 	mu   sync.Mutex
 	path string
@@ -171,26 +59,36 @@ func Open(path string) (*Store, error) {
 	_ = f.Close()
 
 	dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)", path)
-	db, err := sql.Open("sqlite", dsn)
+	gdb, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
+		Logger:                                   logger.Default.LogMode(logger.Silent),
+		DisableForeignKeyConstraintWhenMigrating: true,
+	})
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(1)
-	if _, err := db.Exec(schema); err != nil {
-		_ = db.Close()
+	sqlDB, err := gdb.DB()
+	if err != nil {
 		return nil, err
 	}
-	s := &Store{db: db, path: path}
-	if err := s.migrate(); err != nil {
-		_ = db.Close()
+	sqlDB.SetMaxOpenConns(1)
+	s := &Store{gdb: gdb, db: sqlDB, path: path}
+	if err := s.dedupeFilterFeeds(); err != nil {
+		_ = sqlDB.Close()
+		return nil, err
+	}
+	if err := gdb.AutoMigrate(schemaModels()...); err != nil {
+		_ = sqlDB.Close()
 		return nil, err
 	}
 	if err := s.ensureMeta(); err != nil {
-		_ = db.Close()
+		_ = sqlDB.Close()
 		return nil, err
 	}
 	return s, nil
 }
+
+// Gorm returns the GORM handle. Schema lives in the models passed to AutoMigrate.
+func (s *Store) Gorm() *gorm.DB { return s.gdb }
 
 func (s *Store) Close() error { return s.db.Close() }
 
@@ -201,20 +99,6 @@ func (s *Store) Checkpoint() error {
 	defer s.mu.Unlock()
 	_, err := s.db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
 	return err
-}
-
-func (s *Store) migrate() error {
-	// Existing DBs created the members table before role existed.
-	_, _ = s.db.Exec(`ALTER TABLE cluster_members ADD COLUMN role TEXT NOT NULL DEFAULT 'secondary'`)
-	_, _ = s.db.Exec(`ALTER TABLE oidc_config ADD COLUMN button_text TEXT NOT NULL DEFAULT ''`)
-	_, _ = s.db.Exec(`ALTER TABLE oidc_config ADD COLUMN button_image TEXT NOT NULL DEFAULT ''`)
-	if err := s.dedupeFilterFeeds(); err != nil {
-		return err
-	}
-	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS filter_feeds_action_url ON filter_feeds(action, url)`); err != nil {
-		return err
-	}
-	return nil
 }
 
 func (s *Store) ensureMeta() error {

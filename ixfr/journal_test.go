@@ -1,12 +1,32 @@
 package ixfr
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/miekg/dns"
 )
+
+type memJournal struct{ data map[string][]byte }
+
+func newMemJournal() *memJournal {
+	return &memJournal{data: map[string][]byte{}}
+}
+
+func (m *memJournal) Load(origin string) ([]byte, error) { return m.data[origin], nil }
+
+func (m *memJournal) Save(origin string, data []byte) error {
+	m.data[origin] = append([]byte(nil), data...)
+	return nil
+}
+
+func testIXFR(history int, b JournalBackend) *IXFR {
+	if b == nil {
+		b = newMemJournal()
+	}
+	x := New("example.org.", history)
+	x.SetBackend(b)
+	return x
+}
 
 func mustRR(t *testing.T, s string) dns.RR {
 	t.Helper()
@@ -61,10 +81,9 @@ func TestDiffAddDeleteTTL(t *testing.T) {
 }
 
 func TestIXFRStreamMatchesRFC1995(t *testing.T) {
-	dir := t.TempDir()
-	x := &IXFR{Zone: "example.org.", history: 8, path: filepath.Join(dir, "j.ixfr")}
+	x := testIXFR(8, nil)
 	gen1 := zone(1)
-	if err := x.Register("example.org.", x.path, gen1); err != nil {
+	if err := x.Register("example.org.", gen1); err != nil {
 		t.Fatal(err)
 	}
 	txt := mustRR(t, `_acme-challenge.example.org. 60 IN TXT "tok"`)
@@ -142,10 +161,9 @@ func TestIXFRStreamMatchesRFC1995(t *testing.T) {
 }
 
 func TestHistoryCapFallsBackToAXFR(t *testing.T) {
-	dir := t.TempDir()
-	x := &IXFR{Zone: "example.org.", history: 1, path: filepath.Join(dir, "j.ixfr")}
+	x := testIXFR(1, nil)
 	g := zone(1)
-	if err := x.Register("example.org.", x.path, g); err != nil {
+	if err := x.Register("example.org.", g); err != nil {
 		t.Fatal(err)
 	}
 	for ser := uint32(2); ser <= 4; ser++ {
@@ -171,11 +189,10 @@ func TestHistoryCapFallsBackToAXFR(t *testing.T) {
 }
 
 func TestJournalPersistsAndReconciles(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "j.ixfr")
-	x := &IXFR{Zone: "example.org.", history: 8, path: path}
+	store := newMemJournal()
+	x := testIXFR(8, store)
 	g1 := zone(1)
-	if err := x.Register("example.org.", path, g1); err != nil {
+	if err := x.Register("example.org.", g1); err != nil {
 		t.Fatal(err)
 	}
 	txt := mustRR(t, `_acme-challenge.example.org. 60 IN TXT "tok"`)
@@ -184,8 +201,8 @@ func TestJournalPersistsAndReconciles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	x2 := &IXFR{Zone: "example.org.", history: 8, path: path}
-	if err := x2.Register("example.org.", path, g2); err != nil {
+	x2 := testIXFR(8, store)
+	if err := x2.Register("example.org.", g2); err != nil {
 		t.Fatal(err)
 	}
 	rrs := drain(t, x2, 1)
@@ -204,8 +221,8 @@ func TestJournalPersistsAndReconciles(t *testing.T) {
 	if err := x.Commit(g2, g3); err != nil {
 		t.Fatal(err)
 	}
-	x3 := &IXFR{Zone: "example.org.", history: 8, path: path}
-	if err := x3.Register("example.org.", path, g2); err != nil { // zone file still serial 2
+	x3 := testIXFR(8, store)
+	if err := x3.Register("example.org.", g2); err != nil { // zone still serial 2
 		t.Fatal(err)
 	}
 	if n := len(x3.journal.incs); n != 1 {
@@ -214,8 +231,8 @@ func TestJournalPersistsAndReconciles(t *testing.T) {
 }
 
 func TestMissingJournalIsEmptyHistory(t *testing.T) {
-	x := &IXFR{Zone: "example.org.", history: 8}
-	if err := x.Register("example.org.", filepath.Join(t.TempDir(), "nope.ixfr"), zone(2)); err != nil {
+	x := testIXFR(8, newMemJournal())
+	if err := x.Register("example.org.", zone(2)); err != nil {
 		t.Fatal(err)
 	}
 	rrs := drain(t, x, 1)
@@ -264,10 +281,9 @@ func TestCommitManyRRTypesRoundTrip(t *testing.T) {
 		wantName[rr.Header().Name] = true
 	}
 
-	dir := t.TempDir()
-	path := filepath.Join(dir, "j.ixfr")
-	x := &IXFR{Zone: "example.org.", history: 8, path: path}
-	if err := x.Register("example.org.", path, g1); err != nil {
+	store := newMemJournal()
+	x := testIXFR(8, store)
+	if err := x.Register("example.org.", g1); err != nil {
 		t.Fatal(err)
 	}
 	if err := x.Commit(g1, g2); err != nil {
@@ -287,8 +303,8 @@ func TestCommitManyRRTypesRoundTrip(t *testing.T) {
 		t.Error("IXFR included unchanged www")
 	}
 
-	x2 := &IXFR{Zone: "example.org.", history: 8, path: path}
-	if err := x2.Register("example.org.", path, g2); err != nil {
+	x2 := testIXFR(8, store)
+	if err := x2.Register("example.org.", g2); err != nil {
 		t.Fatal(err)
 	}
 	rrs = drain(t, x2, 1)
@@ -304,13 +320,10 @@ func TestCommitManyRRTypesRoundTrip(t *testing.T) {
 }
 
 func TestCorruptJournalIsNotFatal(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "j.ixfr")
-	if err := os.WriteFile(path, []byte("this is not a journal\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	x := &IXFR{Zone: "example.org.", history: 8, path: path}
-	if err := x.Register("example.org.", path, zone(1)); err != nil {
+	store := newMemJournal()
+	store.data["example.org."] = []byte("this is not a journal\n")
+	x := testIXFR(8, store)
+	if err := x.Register("example.org.", zone(1)); err != nil {
 		t.Fatal(err)
 	}
 	if x.journal == nil {

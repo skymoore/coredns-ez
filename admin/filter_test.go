@@ -135,8 +135,18 @@ func TestServeDNSAppliesFilter(t *testing.T) {
 	rec = &dnsRec{}
 	next = &stubNext{}
 	code, err = a.serveWithNext(context.Background(), rec, req, next)
+	if err != nil || next.called || rec.msg == nil || rec.msg.Rcode != dns.RcodeRefused {
+		t.Fatalf("no-acl recursion code=%d rcode=%v err=%v called=%v", code, rec.msg, err, next.called)
+	}
+
+	if err := a.db.SetRecursion([]string{"127.0.0.1/32"}); err != nil {
+		t.Fatal(err)
+	}
+	rec = &dnsRec{}
+	next = &stubNext{}
+	code, err = a.serveWithNext(context.Background(), rec, req, next)
 	if err != nil || !next.called || code != dns.RcodeSuccess {
-		t.Fatalf("passthrough code=%d err=%v called=%v", code, err, next.called)
+		t.Fatalf("recursion passthrough code=%d err=%v called=%v", code, err, next.called)
 	}
 }
 

@@ -8,24 +8,24 @@ import (
 )
 
 type User struct {
-	ID           string `json:"id"`
-	Username     string `json:"username"`
-	PasswordHash string `json:"password_hash,omitempty"`
-	Role         string `json:"role"`
-	Disabled     bool   `json:"disabled"`
-	CreatedAt    int64  `json:"created_at"`
-	UpdatedAt    int64  `json:"updated_at"`
+	ID           string `json:"id" gorm:"primaryKey"`
+	Username     string `json:"username" gorm:"uniqueIndex;not null"`
+	PasswordHash string `json:"password_hash,omitempty" gorm:"column:password_hash;not null"`
+	Role         string `json:"role" gorm:"not null"`
+	Disabled     bool   `json:"disabled" gorm:"not null;default:0;type:integer"`
+	CreatedAt    int64  `json:"created_at" gorm:"column:created_at;not null;autoCreateTime:false"`
+	UpdatedAt    int64  `json:"updated_at" gorm:"column:updated_at;not null;autoUpdateTime:false"`
 }
 
 type Token struct {
-	ID        string `json:"id"`
-	UserID    string `json:"user_id"`
-	Name      string `json:"name"`
-	TokenHash string `json:"token_hash,omitempty"`
-	Prefix    string `json:"prefix"`
-	Role      string `json:"role"`
-	ExpiresAt *int64 `json:"expires_at,omitempty"`
-	CreatedAt int64  `json:"created_at"`
+	ID        string `json:"id" gorm:"primaryKey"`
+	UserID    string `json:"user_id" gorm:"column:user_id;index;not null"`
+	Name      string `json:"name" gorm:"not null"`
+	TokenHash string `json:"token_hash,omitempty" gorm:"column:token_hash;uniqueIndex;not null"`
+	Prefix    string `json:"prefix" gorm:"not null"`
+	Role      string `json:"role" gorm:"not null"`
+	ExpiresAt *int64 `json:"expires_at,omitempty" gorm:"column:expires_at"`
+	CreatedAt int64  `json:"created_at" gorm:"column:created_at;not null;autoCreateTime:false"`
 }
 
 func ValidRole(r string) bool {

@@ -100,7 +100,7 @@ This build does not run ACME.
 
 ## Backup
 
-Settings → Backup (operator+) downloads a zip of sqlite, `zones/`, Corefile,
+Settings → Backup (operator+) downloads a zip of sqlite, leftover `zones/` files if any, Corefile,
 and `tls/` beside the Corefile. The installer makes `/etc/coredns` and
 `/var/lib/coredns` owned by `coredns` so that path is readable at runtime.
 
@@ -108,8 +108,7 @@ Stop CoreDNS, or checkpoint sqlite, then copy **both** trees.
 
 | What | Docker / default install |
 |---|---|
-| Identity (users, tokens, TSIG, ACLs, filters, cluster, zone inventory) | `/var/lib/coredns/admin.sqlite` and `-wal`/`-shm` if present |
-| Zone files and IXFR journals | `/var/lib/coredns/zones/` (host install: Corefile `data`) |
+| Identity, records, TSIG, ACLs, filters, cluster, IXFR journals | `/var/lib/coredns/admin.sqlite` and `-wal`/`-shm` if present |
 | Corefile and TLS material | `/etc/coredns/Corefile`, `/etc/coredns/tls/` |
 | Binary (host install) | `/var/lib/coredns/coredns` (`/usr/local/bin/coredns` is a symlink) |
 
@@ -117,9 +116,8 @@ Stop CoreDNS, or checkpoint sqlite, then copy **both** trees.
 sqlite3 /var/lib/coredns/admin.sqlite 'PRAGMA wal_checkpoint(TRUNCATE);'
 ```
 
-Restore: stop, replace both trees, start. Copying sqlite without zone files (or
-the reverse) splits inventory from masters. Filter lists live in sqlite; record
-RRs do not.
+Restore: stop, replace sqlite (and Corefile/tls), start. Records, filters, and
+IXFR journals live in sqlite.
 
 ## Upgrade
 

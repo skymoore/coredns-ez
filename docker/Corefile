@@ -15,6 +15,7 @@ https://.:8080 {
 	prometheus 127.0.0.1:9153
 	errors
 	log
+	qstat
 	admin {
 		db /var/lib/coredns/admin.sqlite
 		data /var/lib/coredns/zones
@@ -27,6 +28,7 @@ https://.:8080 {
 	prometheus 127.0.0.1:9153
 	errors
 	log
+	qstat
 	admin
 	transfer {
 		to 127.0.0.1

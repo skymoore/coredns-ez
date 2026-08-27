@@ -1,10 +1,10 @@
 package store
 
 type AuditRow struct {
-	ID     int64  `json:"id"`
-	At     int64  `json:"at"`
-	Actor  string `json:"actor"`
-	Action string `json:"action"`
+	ID     int64  `json:"id" gorm:"primaryKey;autoIncrement"`
+	At     int64  `json:"at" gorm:"column:at;not null;index"`
+	Actor  string `json:"actor" gorm:"not null"`
+	Action string `json:"action" gorm:"not null"`
 	Origin string `json:"origin,omitempty"`
 	Detail string `json:"detail,omitempty"`
 }

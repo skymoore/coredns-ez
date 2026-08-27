@@ -22,7 +22,7 @@ func (v *originView) Source() string {
 	return zonereg.SourceCorefile
 }
 
-func (v *originView) Path() string { return v.s.pathFor(v.origin) }
+func (v *originView) Path() string { return "" }
 
 func (v *originView) Records() []dns.RR { return v.s.RecordsFor(v.origin) }
 

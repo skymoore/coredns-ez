@@ -1,11 +1,10 @@
 package admin
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/coredns/coredns/plugin"
@@ -16,8 +15,57 @@ import (
 	"github.com/skymoore/coredns-ez/internal/zonereg"
 )
 
-func persistNameView(origin, acl string) string {
-	return persistName(origin) + "." + acl
+func (a *Admin) attachViews(snap *store.Snapshot) {
+	rows, err := a.db.ListZoneViews()
+	if err != nil {
+		return
+	}
+	out := make([]store.ZoneView, 0, len(rows))
+	for _, v := range rows {
+		v.Path = ""
+		v.Data = nil
+		out = append(out, v)
+	}
+	snap.Views = out
+}
+
+func (a *Admin) replaceViewsFromSnap(views []store.ZoneView) error {
+	for _, v := range views {
+		v.Origin = strings.ToLower(dns.CanonicalName(v.Origin))
+		v.ACL = strings.ToLower(strings.TrimSpace(v.ACL))
+		if v.Origin == "" || v.ACL == "" {
+			continue
+		}
+		if len(v.Data) > 0 && !a.db.HasRecords(v.Origin, v.ACL) {
+			rrs, err := parseMasterBytes(v.Origin, v.Data)
+			if err != nil {
+				log.Warningf("view %s %s: %v", v.Origin, v.ACL, err)
+				continue
+			}
+			if err := a.db.ReplaceRecords(v.Origin, v.ACL, rrs); err != nil {
+				return err
+			}
+		}
+		if err := a.db.UpsertZoneView(store.ZoneView{Origin: v.Origin, ACL: v.ACL}); err != nil {
+			return err
+		}
+	}
+	a.mu.Lock()
+	a.views = nil
+	a.mu.Unlock()
+	return a.loadViews()
+}
+
+func parseMasterBytes(origin string, body []byte) ([]dns.RR, error) {
+	zp := dns.NewZoneParser(bytes.NewReader(body), origin, "")
+	var rrs []dns.RR
+	for rr, ok := zp.Next(); ok; rr, ok = zp.Next() {
+		rrs = append(rrs, rr)
+	}
+	if err := zp.Err(); err != nil {
+		return nil, err
+	}
+	return rrs, nil
 }
 
 func (a *Admin) matchACL(ip net.IP) (store.ACL, bool) {
@@ -81,32 +129,37 @@ func (a *Admin) ensureView(origin, acl string) (*dnsupdatepersist.UpdatePersist,
 	if pub == nil {
 		return nil, fmt.Errorf("not a writable primary")
 	}
-	if err := os.MkdirAll(a.cfg.Data, 0o755); err != nil {
-		return nil, err
-	}
-	path := filepath.Join(a.cfg.Data, persistNameView(origin, acl))
 	var seed []dns.RR
-	for _, rr := range pub.Records() {
-		switch rr.Header().Rrtype {
-		case dns.TypeSOA, dns.TypeNS:
-			if strings.EqualFold(rr.Header().Name, origin) {
-				seed = append(seed, dns.Copy(rr))
+	if a.db.HasRecords(origin, acl) {
+		got, err := a.db.ListRecords(origin, acl)
+		if err != nil {
+			return nil, err
+		}
+		seed = got
+	} else {
+		for _, rr := range pub.Records() {
+			switch rr.Header().Rrtype {
+			case dns.TypeSOA, dns.TypeNS:
+				if strings.EqualFold(rr.Header().Name, origin) {
+					seed = append(seed, dns.Copy(rr))
+				}
 			}
 		}
+		if soaOf(seed) == nil {
+			return nil, fmt.Errorf("public zone has no SOA")
+		}
+		if err := a.db.ReplaceRecords(origin, acl, seed); err != nil {
+			return nil, err
+		}
 	}
-	if soaOf(seed) == nil {
-		return nil, fmt.Errorf("public zone has no SOA")
-	}
-	if err := dnsupdatepersist.WriteSeed(path, origin, seed); err != nil {
-		return nil, err
-	}
-	d, err := dnsupdatepersist.New(origin, path, nil)
+	d, err := dnsupdatepersist.NewFromRecords(origin, seed, nil)
 	if err != nil {
 		return nil, err
 	}
+	d.SetPersist(a.persistView(origin, acl))
 	d.SetTransfer(a.xfer)
 	d.SetNext(a.Next)
-	if err := a.db.UpsertZoneView(store.ZoneView{Origin: origin, ACL: acl, Path: path}); err != nil {
+	if err := a.db.UpsertZoneView(store.ZoneView{Origin: origin, ACL: acl}); err != nil {
 		return nil, err
 	}
 	a.putView(origin, acl, d)
@@ -119,11 +172,17 @@ func (a *Admin) loadViews() error {
 		return err
 	}
 	for _, v := range rows {
-		d, err := dnsupdatepersist.New(v.Origin, v.Path, nil)
+		rrs, err := a.loadZoneRRs(v.Origin, v.ACL)
 		if err != nil {
 			log.Warningf("load view %s %s: %v", v.Origin, v.ACL, err)
 			continue
 		}
+		d, err := dnsupdatepersist.NewFromRecords(v.Origin, rrs, nil)
+		if err != nil {
+			log.Warningf("load view %s %s: %v", v.Origin, v.ACL, err)
+			continue
+		}
+		d.SetPersist(a.persistView(v.Origin, v.ACL))
 		d.SetTransfer(a.xfer)
 		d.SetNext(a.Next)
 		a.putView(v.Origin, v.ACL, d)
@@ -136,9 +195,8 @@ func (a *Admin) dropViews(origin string) {
 	m := a.views[origin]
 	delete(a.views, origin)
 	a.mu.Unlock()
-	for _, d := range m {
-		_ = os.Remove(d.Path())
-		_ = os.Remove(d.Path() + ".ixfr")
+	for acl := range m {
+		_ = a.db.DeleteRecords(origin, acl)
 	}
 	_ = a.db.DeleteZoneViews(origin)
 }
@@ -176,6 +234,17 @@ func (a *Admin) pickView(origin string, r *dns.Msg, ip net.IP) *dnsupdatepersist
 	return nil
 }
 
+func zoneTransfer(r *dns.Msg) bool {
+	if r == nil || len(r.Question) == 0 {
+		return false
+	}
+	switch r.Question[0].Qtype {
+	case dns.TypeAXFR, dns.TypeIXFR:
+		return true
+	}
+	return false
+}
+
 func (a *Admin) pickServe(origin string, r *dns.Msg, ip net.IP) *dnsupdatepersist.UpdatePersist {
 	a.mu.RLock()
 	pub := a.primaries[origin]
@@ -183,18 +252,23 @@ func (a *Admin) pickServe(origin string, r *dns.Msg, ip net.IP) *dnsupdatepersis
 	if pub == nil {
 		return nil
 	}
-	if v := a.pickView(origin, r, ip); v != nil {
-		return v
+	if !zoneTransfer(r) {
+		if v := a.pickView(origin, r, ip); v != nil {
+			return v
+		}
 	}
 	return pub
 }
 
-func (a *Admin) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
-	return a.serveWithNext(ctx, w, r, a.Next)
-}
-
 func (a *Admin) serveWithNext(ctx context.Context, w dns.ResponseWriter, r *dns.Msg, next plugin.Handler) (int, error) {
+	w, done, code, err := a.wrapDNSSEC(w, r)
+	if done {
+		return code, err
+	}
 	a.tsig.Install(ctx)
+	if a.answerDNSSECMeta(w, r) {
+		return dns.RcodeSuccess, nil
+	}
 	state := request.Request{W: w, Req: r}
 	name := state.Name()
 	ip := net.ParseIP(state.IP())
@@ -208,9 +282,11 @@ func (a *Admin) serveWithNext(ctx context.Context, w dns.ResponseWriter, r *dns.
 			return p.ServeDNS(ctx, w, r)
 		}
 	}
-	if vo := a.matchViews(name); vo != "" {
-		if v := a.pickView(vo, r, ip); v != nil {
-			return v.ServeDNS(ctx, w, r)
+	if !zoneTransfer(r) {
+		if vo := a.matchViews(name); vo != "" {
+			if v := a.pickView(vo, r, ip); v != nil {
+				return v.ServeDNS(ctx, w, r)
+			}
 		}
 	}
 	a.mu.RLock()
@@ -224,5 +300,21 @@ func (a *Admin) serveWithNext(ctx context.Context, w dns.ResponseWriter, r *dns.
 	if a.filters != nil && a.filters.blocked(name) {
 		return writeFilterBlock(w, r)
 	}
-	return plugin.NextOrFailure(a.Name(), next, ctx, w, r)
+	if a.recursionAllowed(ip) {
+		return plugin.NextOrFailure(a.Name(), next, ctx, w, r)
+	}
+	return writeRefused(w, r)
+}
+
+func (a *Admin) recursionAllowed(ip net.IP) bool {
+	return a.db.RecursionAllows(ip)
+}
+
+func writeRefused(w dns.ResponseWriter, r *dns.Msg) (int, error) {
+	m := new(dns.Msg)
+	m.SetRcode(r, dns.RcodeRefused)
+	if err := w.WriteMsg(m); err != nil {
+		return dns.RcodeServerFailure, err
+	}
+	return dns.RcodeRefused, nil
 }

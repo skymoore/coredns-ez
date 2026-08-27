@@ -6,22 +6,31 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/miekg/dns"
 	"github.com/skymoore/coredns-ez/admin/store"
 	"github.com/skymoore/coredns-ez/internal/zonereg"
 )
 
 func (a *Admin) handleGetCluster(w http.ResponseWriter, r *http.Request) {
 	id, _ := a.db.Meta(store.MetaClusterID)
+	adv, _ := a.db.Meta(store.MetaAdvertise)
+	override, _ := a.db.Meta(store.MetaPrimaryDNS)
+	effective := ""
+	if from := a.primaryTransferFrom(); len(from) > 0 {
+		effective = from[0]
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"id":      id,
-		"role":    a.cfg.Role,
-		"self_id": a.selfMemberID(),
-		"members": a.roster(r),
+		"id":                   id,
+		"role":                 a.cfg.Role,
+		"self_id":              a.selfMemberID(),
+		"members":              a.roster(r),
+		"advertise_dns":        adv,
+		"primary_dns":          effective,
+		"primary_dns_override": override,
 	})
 }
 
@@ -128,11 +137,12 @@ func (a *Admin) handleClusterConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		URL    string `json:"url"`
-		Token  string `json:"token"`
-		DNS    string `json:"dns"`
-		Name   string `json:"name"`
-		APIURL string `json:"api_url"`
+		URL        string `json:"url"`
+		Token      string `json:"token"`
+		DNS        string `json:"dns"`
+		Name       string `json:"name"`
+		APIURL     string `json:"api_url"`
+		PrimaryDNS string `json:"primary_dns"`
 	}
 	if err := readJSON(r, &body); err != nil || body.URL == "" || body.Token == "" {
 		writeError(w, http.StatusBadRequest, "url and token required")
@@ -147,8 +157,17 @@ func (a *Admin) handleClusterConnect(w http.ResponseWriter, r *http.Request) {
 	if dnsAddr == "" {
 		dnsAddr = a.cfg.AdvertiseDNS
 	}
+	primaryDNS := strings.TrimSpace(body.PrimaryDNS)
+	if primaryDNS != "" {
+		n, err := normalizeDNSAddr(primaryDNS)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		primaryDNS = n
+	}
 	apiURL := publicAPIURL(r, body.APIURL, dnsAddr)
-	if err := a.joinPrimary(body.URL, body.Token, name, dnsAddr, apiURL); err != nil {
+	if err := a.joinPrimary(body.URL, body.Token, name, dnsAddr, apiURL, primaryDNS); err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
@@ -232,7 +251,7 @@ func (a *Admin) handleListMembers(w http.ResponseWriter, r *http.Request) {
 
 func (a *Admin) handlePatchMember(w http.ResponseWriter, r *http.Request) {
 	if a.cfg.Role != rolePrimary {
-		writeError(w, http.StatusForbidden, "only the primary can rename members")
+		writeError(w, http.StatusForbidden, "only the primary can edit members")
 		return
 	}
 	id := chi.URLParam(r, "id")
@@ -242,27 +261,95 @@ func (a *Admin) handlePatchMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Name string `json:"name"`
+		Name    *string `json:"name"`
+		APIURL  *string `json:"api_url"`
+		DNSAddr *string `json:"dns_addr"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	name := strings.TrimSpace(body.Name)
-	if name == "" {
-		writeError(w, http.StatusBadRequest, "name required")
+	if body.Name == nil && body.APIURL == nil && body.DNSAddr == nil {
+		writeError(w, http.StatusBadRequest, "name, api_url, or dns_addr required")
 		return
 	}
-	m.Name = name
+	if body.Name != nil {
+		name := strings.TrimSpace(*body.Name)
+		if name == "" {
+			writeError(w, http.StatusBadRequest, "name required")
+			return
+		}
+		m.Name = name
+	}
+	if body.APIURL != nil {
+		u, err := normalizeMemberAPIURL(*body.APIURL)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		m.APIURL = u
+	}
+	if body.DNSAddr != nil {
+		d, err := normalizeDNSAddr(*body.DNSAddr)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		m.DNSAddr = d
+	}
 	if _, err := a.db.UpsertRosterMember(m); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if memberRole(m) == store.MemberPrimary {
-		_ = a.db.SetMeta(store.MetaNodeName, name)
+	if memberRole(m) == store.MemberPrimary && body.Name != nil {
+		_ = a.db.SetMeta(store.MetaNodeName, m.Name)
+	}
+	if body.DNSAddr != nil && memberRole(m) == store.MemberSecondary {
+		a.appendTransferAddr(m.DNSAddr)
 	}
 	_, _ = a.db.BumpGeneration()
-	writeJSON(w, http.StatusOK, map[string]string{"id": m.ID, "name": name})
+	writeJSON(w, http.StatusOK, map[string]string{"id": m.ID, "name": m.Name, "api_url": m.APIURL, "dns_addr": m.DNSAddr})
+}
+
+func (a *Admin) handlePutPrimaryDNS(w http.ResponseWriter, r *http.Request) {
+	if a.cfg.Role != roleSecondary {
+		writeError(w, http.StatusForbidden, "set primary DNS on a secondary")
+		return
+	}
+	var body struct {
+		DNS string `json:"dns"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	raw := strings.TrimSpace(body.DNS)
+	if raw == "" {
+		_ = a.db.SetMeta(store.MetaPrimaryDNS, "")
+		if adv, _ := a.db.Meta(store.MetaAdvertise); adv != "" {
+			a.cfg.PrimaryDNS = adv
+		} else {
+			a.cfg.PrimaryDNS = ""
+		}
+	} else {
+		addr, err := normalizeDNSAddr(raw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		_ = a.db.SetMeta(store.MetaPrimaryDNS, addr)
+		a.cfg.PrimaryDNS = addr
+	}
+	a.retargetSecondaries()
+	from := a.primaryTransferFrom()
+	out := map[string]string{"primary_dns": "", "primary_dns_override": ""}
+	if ov, _ := a.db.Meta(store.MetaPrimaryDNS); ov != "" {
+		out["primary_dns_override"] = ov
+	}
+	if len(from) > 0 {
+		out["primary_dns"] = from[0]
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (a *Admin) handleDeleteMember(w http.ResponseWriter, r *http.Request) {
@@ -327,12 +414,16 @@ func (a *Admin) fullSnapshot() (store.Snapshot, error) {
 		if info.Kind != zonereg.KindPrimary || seen[info.Origin] {
 			continue
 		}
+		p := zonereg.PrimaryOf(info.Origin)
+		if p == nil || soaOf(p.Records()) == nil {
+			continue
+		}
 		seen[info.Origin] = true
 		snap.Zones = append(snap.Zones, store.ZoneRow{
 			Origin: info.Origin, Kind: zonereg.KindPrimary, Source: info.Source, PersistPath: info.Path,
 		})
 	}
-	a.attachCorefile(&snap)
+	a.attachViews(&snap)
 	return snap, nil
 }
 
@@ -366,6 +457,9 @@ func (a *Admin) handleClusterSnapshotApply(w http.ResponseWriter, r *http.Reques
 }
 
 func (a *Admin) primaryTransferFrom() []string {
+	if v, _ := a.db.Meta(store.MetaPrimaryDNS); strings.TrimSpace(v) != "" {
+		return []string{strings.TrimSpace(v)}
+	}
 	if a.cfg.PrimaryDNS != "" {
 		return []string{a.cfg.PrimaryDNS}
 	}
@@ -373,6 +467,85 @@ func (a *Admin) primaryTransferFrom() []string {
 		return []string{adv}
 	}
 	return nil
+}
+
+func (a *Admin) retargetSecondaries() {
+	from := a.primaryTransferFrom()
+	if len(from) == 0 || a.secondaries == nil {
+		return
+	}
+	a.secondaries.SetAllTransferFrom(from)
+	for _, origin := range a.secondaries.Origins() {
+		_ = a.db.UpsertZone(store.ZoneRow{
+			Origin: origin, Kind: zonereg.KindSecondary, Source: zonereg.SourceAdmin,
+			TransferFrom: store.JoinCSV(from),
+		})
+	}
+}
+
+func snapshotSOAOrigins(recs []store.Record) map[string]bool {
+	out := map[string]bool{}
+	for _, r := range recs {
+		if !strings.EqualFold(r.Type, "SOA") {
+			continue
+		}
+		out[strings.ToLower(dns.CanonicalName(r.Origin))] = true
+	}
+	return out
+}
+
+func (a *Admin) syncSecondariesFromSnap(snap store.Snapshot) {
+	from := a.primaryTransferFrom()
+	haveSOA := snapshotSOAOrigins(snap.Records)
+	want := map[string]bool{}
+	for _, z := range snap.Zones {
+		if z.Kind != zonereg.KindPrimary && z.Kind != zonereg.KindSecondary {
+			continue
+		}
+		origin := strings.ToLower(dns.CanonicalName(z.Origin))
+		if !haveSOA[origin] {
+			continue
+		}
+		want[origin] = true
+		masters := from
+		if len(masters) == 0 {
+			masters = store.SplitCSV(z.TransferFrom)
+		}
+		a.ensureClusterSecondary(origin, masters)
+	}
+	if a.secondaries == nil {
+		return
+	}
+	for _, origin := range a.secondaries.Origins() {
+		if want[origin] {
+			continue
+		}
+		if err := a.secondaries.StopOrigin(origin); err != nil {
+			log.Warningf("drop clustered zone %s: %v", origin, err)
+		}
+	}
+}
+
+func (a *Admin) ensureClusterSecondary(origin string, from []string) {
+	if zonereg.PrimaryOf(origin) != nil {
+		return
+	}
+	if zonereg.SecondaryOf(origin) == nil {
+		if len(from) == 0 {
+			log.Warningf("sync zone %s: no primary DNS to transfer from", origin)
+		} else if err := a.createSecondaryNoPersist(origin, from); err != nil {
+			log.Warningf("sync zone %s: %v", origin, err)
+		}
+	} else if a.secondaries != nil && len(from) > 0 {
+		a.secondaries.SetTransferFrom(origin, from)
+	}
+	if a.secondaries != nil {
+		a.secondaries.ReloadFromStore(origin)
+	}
+	_ = a.db.UpsertZone(store.ZoneRow{
+		Origin: origin, Kind: zonereg.KindSecondary, Source: zonereg.SourceAdmin,
+		TransferFrom: store.JoinCSV(from),
+	})
 }
 
 func (a *Admin) applySnapshot(snap store.Snapshot) error {
@@ -391,31 +564,14 @@ func (a *Admin) applySnapshot(snap store.Snapshot) error {
 	if err != nil {
 		log.Warningf("corefile sync: %v", err)
 	}
-	from := a.primaryTransferFrom()
-	for _, z := range snap.Zones {
-		if z.Kind != zonereg.KindPrimary {
-			continue
-		}
-		if zonereg.SecondaryOf(z.Origin) != nil {
-			continue
-		}
-		if len(from) == 0 {
-			log.Warningf("sync zone %s: no primary DNS to transfer from", z.Origin)
-			continue
-		}
-		if err := a.createSecondaryNoPersist(z.Origin, from); err != nil {
-			log.Warningf("sync zone %s: %v", z.Origin, err)
-			continue
-		}
-		_ = a.db.UpsertZone(store.ZoneRow{
-			Origin: z.Origin, Kind: zonereg.KindSecondary, Source: zonereg.SourceAdmin,
-			PersistPath: filepath.Join(a.cfg.Data, persistName(z.Origin)), TransferFrom: store.JoinCSV(from),
-			CreatedAt: z.CreatedAt,
-		})
+	a.syncSecondariesFromSnap(snap)
+	if err := a.replaceViewsFromSnap(snap.Views); err != nil {
+		log.Warningf("view sync: %v", err)
 	}
 	a.publishTSIG()
 	a.publishFilter()
 	a.publishTransfer()
+	a.rebuildSigner()
 	syncCount.WithLabelValues("ok").Inc()
 	a.refreshZoneMetrics()
 	if reload {
@@ -486,7 +642,7 @@ func (a *Admin) pushSnapshot() {
 	// pull /cluster/snapshot every 30s.
 }
 
-func (a *Admin) joinPrimary(url, token, name, dnsAddr, apiURL string) error {
+func (a *Admin) joinPrimary(url, token, name, dnsAddr, apiURL, primaryDNS string) error {
 	url = strings.TrimRight(strings.TrimSpace(url), "/")
 	payload, _ := json.Marshal(map[string]string{
 		"token": token, "name": name, "api_url": apiURL, "dns_addr": dnsAddr,
@@ -529,6 +685,10 @@ func (a *Admin) joinPrimary(url, token, name, dnsAddr, apiURL string) error {
 		if a.cfg.PrimaryDNS == "" {
 			a.cfg.PrimaryDNS = out.AdvertiseDNS
 		}
+	}
+	if primaryDNS != "" {
+		_ = a.db.SetMeta(store.MetaPrimaryDNS, primaryDNS)
+		a.cfg.PrimaryDNS = primaryDNS
 	}
 	return a.applySnapshot(out.Snapshot)
 }

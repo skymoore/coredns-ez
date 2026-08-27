@@ -6,59 +6,65 @@ import (
 )
 
 type Member struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	APIURL     string `json:"api_url"`
-	DNSAddr    string `json:"dns_addr"`
-	SecretHash string `json:"-"`
-	Role       string `json:"role"`
-	JoinedAt   int64  `json:"joined_at"`
-	LastSeen   int64  `json:"last_seen"`
+	ID         string `json:"id" gorm:"primaryKey"`
+	Name       string `json:"name" gorm:"not null"`
+	APIURL     string `json:"api_url" gorm:"column:api_url;not null"`
+	DNSAddr    string `json:"dns_addr" gorm:"column:dns_addr;not null"`
+	SecretHash string `json:"-" gorm:"column:secret_hash;not null"`
+	Role       string `json:"role" gorm:"not null;default:secondary"`
+	JoinedAt   int64  `json:"joined_at" gorm:"column:joined_at;not null;autoCreateTime:false"`
+	LastSeen   int64  `json:"last_seen" gorm:"column:last_seen;not null;autoUpdateTime:false"`
 }
 
 type JoinToken struct {
-	ID        string
-	TokenHash string
-	ExpiresAt int64
-	UsedAt    *int64
+	ID        string `gorm:"primaryKey"`
+	TokenHash string `gorm:"column:token_hash;uniqueIndex;not null"`
+	ExpiresAt int64  `gorm:"column:expires_at;not null"`
+	UsedAt    *int64 `gorm:"column:used_at"`
 }
 
 type ZoneRow struct {
-	Origin       string `json:"origin"`
-	Kind         string `json:"kind"`
-	Source       string `json:"source"`
-	PersistPath  string `json:"persist_path"`
-	TransferFrom string `json:"transfer_from,omitempty"`
-	TransferTo   string `json:"transfer_to,omitempty"`
+	Origin       string `json:"origin" gorm:"primaryKey"`
+	Kind         string `json:"kind" gorm:"not null"`
+	Source       string `json:"source" gorm:"not null"`
+	PersistPath  string `json:"persist_path,omitempty" gorm:"column:persist_path;not null;default:''"`
+	TransferFrom string `json:"transfer_from,omitempty" gorm:"column:transfer_from"`
+	TransferTo   string `json:"transfer_to,omitempty" gorm:"column:transfer_to"`
 	Mutable      string `json:"mutable,omitempty"`
-	CreatedAt    int64  `json:"created_at"`
+	CreatedAt    int64  `json:"created_at" gorm:"column:created_at;not null;autoCreateTime:false"`
 }
 
 type OIDCConfig struct {
-	Issuer       string `json:"issuer"`
-	ClientID     string `json:"client_id"`
-	ClientSecret string `json:"client_secret,omitempty"`
-	RedirectURL  string `json:"redirect_url"`
-	ButtonText   string `json:"button_text,omitempty"`
-	ButtonImage  string `json:"button_image,omitempty"`
+	ID           int    `json:"-" gorm:"primaryKey"`
+	Issuer       string `json:"issuer" gorm:"not null"`
+	ClientID     string `json:"client_id" gorm:"column:client_id;not null"`
+	ClientSecret string `json:"client_secret,omitempty" gorm:"column:client_secret;not null"`
+	RedirectURL  string `json:"redirect_url" gorm:"column:redirect_url;not null"`
+	ButtonText   string `json:"button_text,omitempty" gorm:"column:button_text;not null;default:''"`
+	ButtonImage  string `json:"button_image,omitempty" gorm:"column:button_image;not null;default:''"`
 }
 
 type Snapshot struct {
-	Generation  int64        `json:"generation"`
-	Password    *bool        `json:"password,omitempty"`
-	Users       []User       `json:"users"`
-	Tokens      []Token      `json:"tokens"`
-	OIDC        *OIDCConfig  `json:"oidc,omitempty"`
-	Zones       []ZoneRow    `json:"zones"`
-	Members     []Member     `json:"members"`
-	ACLs        []ACL        `json:"acls"`
-	TSIGKeys    []TSIGKey    `json:"tsig_keys,omitempty"`
-	FilterFeeds []FilterFeed `json:"filter_feeds,omitempty"`
-	FilterRules []FilterRule `json:"filter_rules,omitempty"`
+	Generation   int64             `json:"generation"`
+	Password     *bool             `json:"password,omitempty"`
+	Users        []User            `json:"users"`
+	Tokens       []Token           `json:"tokens"`
+	OIDC         *OIDCConfig       `json:"oidc,omitempty"`
+	Zones        []ZoneRow         `json:"zones"`
+	Members      []Member          `json:"members"`
+	ACLs         []ACL             `json:"acls"`
+	TSIGKeys     []TSIGKey         `json:"tsig_keys,omitempty"`
+	FilterFeeds  []FilterFeed      `json:"filter_feeds,omitempty"`
+	FilterRules  []FilterRule      `json:"filter_rules,omitempty"`
 	TransferTo   []string          `json:"transfer_to"`
+	Recursion    []string          `json:"recursion"`
 	Corefile     string            `json:"corefile,omitempty"`
 	CorefileHash string            `json:"corefile_hash,omitempty"`
 	CoreFiles    map[string][]byte `json:"core_files,omitempty"`
+	Views        []ZoneView        `json:"views,omitempty"`
+	Records      []Record          `json:"records,omitempty"`
+	JWTHMAC      string            `json:"jwt_hmac,omitempty"`
+	DNSSECKeys   []DNSSECKey       `json:"dnssec_keys,omitempty"`
 }
 
 func (s *Store) InsertJoinToken(hash string, ttl time.Duration) (JoinToken, error) {
@@ -246,6 +252,18 @@ func (s *Store) ListZones() ([]ZoneRow, error) {
 func (s *Store) DeleteZone(origin string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, err := s.db.Exec(`DELETE FROM records WHERE origin = ?`, origin); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`DELETE FROM ixfr_journals WHERE origin = ?`, origin); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`DELETE FROM zone_views WHERE origin = ?`, origin); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`DELETE FROM dnssec_keys WHERE origin = ?`, origin); err != nil {
+		return err
+	}
 	_, err := s.db.Exec(`DELETE FROM zones WHERE origin = ?`, origin)
 	return err
 }
@@ -322,10 +340,22 @@ func (s *Store) Snapshot() (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
+	recs, err := s.ListAllRecords()
+	if err != nil {
+		return Snapshot{}, err
+	}
+	dkeys, err := s.ListDNSSECKeys()
+	if err != nil {
+		return Snapshot{}, err
+	}
 	to := s.TransferTo()
-	snap := Snapshot{Generation: s.Generation(), Users: users, Tokens: tokens, Zones: zones, Members: members, ACLs: acls, TSIGKeys: keys, FilterFeeds: feeds, FilterRules: rules, TransferTo: to}
+	recurs := s.Recursion()
+	snap := Snapshot{Generation: s.Generation(), Users: users, Tokens: tokens, Zones: zones, Members: members, ACLs: acls, TSIGKeys: keys, FilterFeeds: feeds, FilterRules: rules, TransferTo: to, Recursion: recurs, Records: recs, DNSSECKeys: dkeys}
 	if oidc, err := s.GetOIDC(); err == nil {
 		snap.OIDC = &oidc
+	}
+	if hmac, err := s.Meta(MetaJWTHMAC); err == nil {
+		snap.JWTHMAC = hmac
 	}
 	return snap, nil
 }
@@ -403,8 +433,24 @@ func (s *Store) ApplySnapshot(snap Snapshot) error {
 	if err := applyFiltersTx(tx, snap.FilterFeeds, snap.FilterRules); err != nil {
 		return err
 	}
+	if err := applyRecordsTx(tx, snap.Records); err != nil {
+		return err
+	}
+	if err := applyDNSSECKeysTx(tx, snap.DNSSECKeys); err != nil {
+		return err
+	}
 	if snap.TransferTo != nil {
 		if _, err := tx.Exec(`INSERT INTO meta(k, v) VALUES(?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v`, MetaTransferTo, JoinCSV(snap.TransferTo)); err != nil {
+			return err
+		}
+	}
+	if snap.Recursion != nil {
+		if _, err := tx.Exec(`INSERT INTO meta(k, v) VALUES(?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v`, MetaRecursion, JoinCSV(snap.Recursion)); err != nil {
+			return err
+		}
+	}
+	if snap.JWTHMAC != "" {
+		if _, err := tx.Exec(`INSERT INTO meta(k, v) VALUES(?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v`, MetaJWTHMAC, snap.JWTHMAC); err != nil {
 			return err
 		}
 	}

@@ -16,11 +16,11 @@ const (
 
 // TSIGKey is a named HMAC secret used for RFC 2845 TSIG (nsupdate, AXFR/IXFR).
 type TSIGKey struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Algorithm string `json:"algorithm"`
-	Secret    string `json:"secret,omitempty"`
-	CreatedAt int64  `json:"created_at"`
+	ID        string `json:"id" gorm:"primaryKey"`
+	Name      string `json:"name" gorm:"uniqueIndex;not null"`
+	Algorithm string `json:"algorithm" gorm:"not null"`
+	Secret    string `json:"secret,omitempty" gorm:"not null"`
+	CreatedAt int64  `json:"created_at" gorm:"column:created_at;not null;autoCreateTime:false"`
 }
 
 func NormalizeTSIGAlg(alg string) (string, error) {

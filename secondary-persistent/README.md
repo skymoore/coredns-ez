@@ -2,14 +2,13 @@
 
 ## Name
 
-*secondary-persistent* - transfers a zone from a primary, serves it, and writes it to disk.
+*secondary-persistent* - transfers a zone from a primary, serves it, and persists it to SQLite.
 
 ## Description
 
-*secondary-persistent* is an out-of-tree replacement for *secondary* that keeps a durable RFC 1035
-master-file copy of each transferred zone. On startup it loads any existing file so CoreDNS can
-answer immediately, then SOA-checks the primary (RFC 1982) and refreshes only when the remote
-serial is newer.
+*secondary-persistent* is an out-of-tree replacement for *secondary* that keeps each transferred
+zone in SQLite. On startup it loads any existing sqlite rows so CoreDNS can answer immediately,
+then SOA-checks the primary (RFC 1982) and refreshes only when the remote serial is newer.
 
 Inbound transfers use IXFR when a local serial exists, and fall back to AXFR if IXFR fails, is
 refused, is up-to-date despite a newer remote serial, or is an AXFR-style response. Outbound
@@ -37,16 +36,11 @@ secondary-persistent [ZONES...] {
 
 * `transfer from` specifies from which **ADDRESS** to fetch the zone. It can be specified multiple
   times; if one does not work, another will be tried.
-* `persist` **PATH** writes a single origin to that file. Relative paths are joined with *root*.
-  Requires exactly one origin.
-* `directory` **DIR** writes each origin to `DIR/db.<origin>` (trailing dot stripped). Required
-  when `catalog` is used or when more than one origin is configured.
+* `persist` **PATH** and `directory` **DIR** are accepted and ignored. Zones persist in SQLite.
 * `catalog` treats the transferred zone as an RFC 9432 catalog zone. Optional **MEMBER-ZONES**
-  restrict which member zone names are accepted. Members are persisted as `DIR/db.<member>`.
+  restrict which member zone names are accepted. Members persist in SQLite.
 * `fallthrough` If a query for a record in the zone results in NXDOMAIN, the query is passed to
   the next plugin.
-
-Exactly one of `persist` or `directory` is required.
 
 ## Examples
 

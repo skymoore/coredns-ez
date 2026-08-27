@@ -134,9 +134,11 @@ export function RecordTable({ origin, records, canWrite }: { origin: string; rec
                         <Button variant="ghost" size="icon" aria-label="Edit record" onClick={() => setEdit(s)}>
                           <PencilSimple size={16} />
                         </Button>
-                        <Button variant="ghost" size="icon" aria-label="Delete record" onClick={() => setDel(s)}>
-                          <Trash size={16} />
-                        </Button>
+                        {s.type === "SOA" ? null : (
+                          <Button variant="ghost" size="icon" aria-label="Delete record" onClick={() => setDel(s)}>
+                            <Trash size={16} />
+                          </Button>
+                        )}
                       </TD>
                     ) : null}
                   </TR>

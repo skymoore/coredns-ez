@@ -3,13 +3,10 @@ package admin
 import (
 	"database/sql"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/skymoore/coredns-ez/admin/store"
-	dnsupdatepersist "github.com/skymoore/coredns-ez/dns-update-persistent"
 )
 
 func (a *Admin) handleListACLs(w http.ResponseWriter, _ *http.Request) {
@@ -79,25 +76,9 @@ func (a *Admin) renameViews(oldName, newName string) {
 			continue
 		}
 		delete(m, oldName)
-		newPath := filepath.Join(a.cfg.Data, persistNameView(origin, newName))
-		oldPath := d.Path()
-		if oldPath != "" && oldPath != newPath {
-			if err := os.Rename(oldPath, newPath); err != nil && !os.IsNotExist(err) {
-				log.Warningf("rename view %s %s: %v", origin, newName, err)
-			}
-			_ = os.Rename(oldPath+".ixfr", newPath+".ixfr")
-			reopened, err := dnsupdatepersist.New(origin, newPath, nil)
-			if err != nil {
-				log.Warningf("reopen view %s %s: %v", origin, newName, err)
-				m[newName] = d
-				continue
-			}
-			reopened.SetTransfer(a.xfer)
-			reopened.SetNext(a.Next)
-			d = reopened
-		}
+		d.SetPersist(a.persistView(origin, newName))
 		m[newName] = d
-		_ = a.db.UpsertZoneView(store.ZoneView{Origin: origin, ACL: newName, Path: d.Path()})
+		_ = a.db.UpsertZoneView(store.ZoneView{Origin: origin, ACL: newName})
 	}
 }
 
@@ -111,9 +92,6 @@ func (a *Admin) handleDeleteACL(w http.ResponseWriter, r *http.Request) {
 	for _, v := range gone {
 		a.mu.Lock()
 		if a.views[v.Origin] != nil {
-			if d := a.views[v.Origin][name]; d != nil {
-				_ = os.Remove(d.Path())
-			}
 			delete(a.views[v.Origin], name)
 		}
 		a.mu.Unlock()

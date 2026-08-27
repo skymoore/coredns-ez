@@ -85,7 +85,7 @@ export function AclsPage() {
     <div>
       <PageHeader
         title="ACLs"
-        description="Named client networks for split-horizon records. First matching ACL wins."
+        description="Named client networks for split-horizon records. First matching ACL wins. Recursion through Unbound is configured separately."
         actions={
           <Button onClick={openCreate}>
             <Plus size={16} />
@@ -140,7 +140,7 @@ export function AclsPage() {
       {rows.length === 0 ? (
         <EmptyState
           title="No ACLs"
-          body="Create an ACL, then attach it to a record to serve a second zonefile to those clients."
+          body="Create an ACL, then attach it to a record to serve a second answer to those clients. This does not grant recursion."
         />
       ) : (
         <div className="rounded-lg border border-border">

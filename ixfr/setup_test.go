@@ -24,9 +24,6 @@ func TestParse(t *testing.T) {
 				if x.history != defaultHistory {
 					t.Errorf("history = %d, want %d", x.history, defaultHistory)
 				}
-				if x.path != "" {
-					t.Errorf("path = %q, want empty (filled at Register)", x.path)
-				}
 			},
 		},
 		{
@@ -35,9 +32,6 @@ func TestParse(t *testing.T) {
 			check: func(t *testing.T, x *IXFR) {
 				if x.history != 8 {
 					t.Errorf("history = %d", x.history)
-				}
-				if x.path != "/var/lib/coredns/db.example.org.ixfr" {
-					t.Errorf("path = %q", x.path)
 				}
 			},
 		},

@@ -21,6 +21,7 @@ import { TokensPage } from "./routes/tokens";
 import { TsigPage } from "./routes/tsig";
 import { SettingsPage } from "./routes/settings";
 import { AclsPage } from "./routes/acls";
+import { RecursionPage } from "./routes/recursion";
 import { FiltersPage } from "./routes/filters";
 import { hasRole } from "./lib/roles";
 import type { Actor, Role } from "./lib/types";
@@ -141,6 +142,16 @@ const aclsRoute = createRoute({
   component: AclsPage,
 });
 
+const recursionRoute = createRoute({
+  getParentRoute: () => authRoute,
+  path: "/recursion",
+  beforeLoad: requireNeed("operator"),
+  component: function Recursion() {
+    const { me } = authRoute.useRouteContext();
+    return <RecursionPage me={me} />;
+  },
+});
+
 const filtersRoute = createRoute({
   getParentRoute: () => authRoute,
   path: "/filters",
@@ -170,6 +181,7 @@ const routeTree = rootRoute.addChildren([
     tokensRoute,
     tsigRoute,
     aclsRoute,
+    recursionRoute,
     filtersRoute,
     settingsRoute,
   ]),

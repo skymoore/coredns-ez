@@ -38,6 +38,7 @@ func (a *Admin) routes() http.Handler {
 			r.Post("/auth/logout", a.handleLogout)
 			r.Get("/node", a.handleNode)
 			r.Get("/metrics", requireRole(store.RoleViewer, a.handleMetrics))
+			r.Get("/queries", requireRole(store.RoleViewer, a.handleQueries))
 			r.Get("/audit", requireRole(store.RoleViewer, a.handleAudit))
 			r.Get("/openapi.json", a.handleOpenAPI)
 
@@ -66,6 +67,9 @@ func (a *Admin) routes() http.Handler {
 			r.Delete("/zones/{origin}", requireRole(store.RoleOperator, a.handleDeleteZone))
 			r.Post("/zones/{origin}/notify", requireRole(store.RoleOperator, a.handleNotifyZone))
 			r.Post("/zones/{origin}/transfer", requireRole(store.RoleOperator, a.handleTransferZone))
+			r.Get("/zones/{origin}/dnssec", requireRole(store.RoleViewer, a.handleGetDNSSEC))
+			r.Post("/zones/{origin}/dnssec", requireRole(store.RoleOperator, a.handleEnableDNSSEC))
+			r.Delete("/zones/{origin}/dnssec", requireRole(store.RoleOperator, a.handleDisableDNSSEC))
 			r.Get("/acls", requireRole(store.RoleViewer, a.handleListACLs))
 			r.Post("/acls", requireRole(store.RoleOperator, a.handleCreateACL))
 			r.Patch("/acls/{name}", requireRole(store.RoleOperator, a.handlePatchACL))
@@ -73,6 +77,9 @@ func (a *Admin) routes() http.Handler {
 
 			r.Get("/transfer", requireRole(store.RoleViewer, a.handleGetTransfer))
 			r.Put("/transfer", requireRole(store.RoleOperator, a.handlePutTransfer))
+
+			r.Get("/recursion", requireRole(store.RoleViewer, a.handleGetRecursion))
+			r.Put("/recursion", requireRole(store.RoleOperator, a.handlePutRecursion))
 
 			r.Get("/filters", requireRole(store.RoleViewer, a.handleGetFilters))
 			r.Post("/filters/rules", requireRole(store.RoleOperator, a.handleCreateFilterRule))
@@ -93,6 +100,7 @@ func (a *Admin) routes() http.Handler {
 			r.Get("/cluster/members", requireRole(store.RoleAdmin, a.handleListMembers))
 			r.Patch("/cluster/members/{id}", requireRole(store.RoleAdmin, a.handlePatchMember))
 			r.Delete("/cluster/members/{id}", requireRole(store.RoleAdmin, a.handleDeleteMember))
+			r.Put("/cluster/primary-dns", requireRole(store.RoleAdmin, a.handlePutPrimaryDNS))
 		})
 
 		r.NotFound(func(w http.ResponseWriter, _ *http.Request) {

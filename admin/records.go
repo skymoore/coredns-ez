@@ -161,6 +161,7 @@ func (a *Admin) handleAddRecord(w http.ResponseWriter, r *http.Request) {
 	out := rrToJSON(rr)
 	out.ACL = strings.ToLower(strings.TrimSpace(body.ACL))
 	a.db.Audit(actorFrom(r).Username, "record.add", origin, rr.String())
+	a.clusterViewChanged(body.ACL)
 	writeJSON(w, http.StatusCreated, out)
 }
 
@@ -218,6 +219,8 @@ func (a *Admin) handlePatchRecord(w http.ResponseWriter, r *http.Request) {
 	out := rrToJSON(newRR)
 	out.ACL = strings.ToLower(strings.TrimSpace(newACL))
 	a.db.Audit(actorFrom(r).Username, "record.update", origin, oldRR.String()+" -> "+newRR.String())
+	a.clusterViewChanged(oldACL)
+	a.clusterViewChanged(newACL)
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -262,10 +265,21 @@ func (a *Admin) handleReplaceRecords(w http.ResponseWriter, r *http.Request) {
 		}
 		adds = append(adds, rr)
 	}
+	if strings.EqualFold(qname, origin) && len(adds) == 0 {
+		switch typ {
+		case dns.TypeNS:
+			writeError(w, http.StatusBadRequest, "apex NS cannot be empty")
+			return
+		case dns.TypeSOA:
+			writeError(w, http.StatusBadRequest, "cannot delete the SOA")
+			return
+		}
+	}
 	if err := p.Apply(adds, []dns.RR{del}); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	a.clusterViewChanged(body.ACL)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "replaced"})
 }
 
@@ -303,5 +317,18 @@ func (a *Admin) handleDeleteRecords(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	a.clusterViewChanged(body.ACL)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func viewACL(acl string) bool {
+	acl = strings.ToLower(strings.TrimSpace(acl))
+	return acl != "" && acl != "public"
+}
+
+func (a *Admin) clusterViewChanged(acl string) {
+	if !viewACL(acl) {
+		return
+	}
+	_, _ = a.db.BumpGeneration()
 }

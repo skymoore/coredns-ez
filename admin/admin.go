@@ -77,6 +77,7 @@ type Admin struct {
 	pullOnce         sync.Once
 	skipReload       bool
 	pendingReload    bool
+	dnssecKeys       map[string][]loadedCSK
 }
 
 func (a *Admin) Name() string { return pluginName }

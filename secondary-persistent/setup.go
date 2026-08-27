@@ -2,7 +2,6 @@ package secondarypersist
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"sync"
 
@@ -35,12 +34,6 @@ func setup(c *caddy.Controller) error {
 	}
 
 	s := newSecondaryPersist(zones, f, catalogZones, pc)
-
-	if s.persistDir != "" {
-		if err := os.MkdirAll(s.persistDir, 0o755); err != nil {
-			return plugin.Error(pluginName, err)
-		}
-	}
 
 	for _, n := range zones.Names {
 		s.loadIfPresent(n, zones.Z[n])
@@ -139,19 +132,13 @@ func newSecondaryPersist(zones file.Zones, f fall.F, catalogZones map[string]plu
 		catalogs:           make(map[string]*catalog.Catalog),
 		catalogZones:       catalogZones,
 		catalogMemberZones: make(map[string]map[string]struct{}),
-		persistPaths:       make(map[string]string),
-		persistDir:         pc.dir,
 		lastSerial:         make(map[string]uint32),
 		hasWritten:         make(map[string]bool),
 		writing:            make(map[string]bool),
 		pending:            make(map[string]zoneSnapshot),
 		persistStop:        make(chan struct{}),
 	}
-	if pc.path != "" {
-		for _, name := range zones.Names {
-			s.persistPaths[name] = pc.path
-		}
-	}
+	_ = pc
 	for name, zone := range zones.Z {
 		s.zoneNames[zone] = name
 	}
@@ -240,19 +227,6 @@ func parseConfig(c *caddy.Controller) (file.Zones, fall.F, map[string]plugin.Zon
 		if !hasTransfer {
 			return file.Zones{}, f, nil, pc, c.Err("secondary-persistent zones require a transfer from property")
 		}
-	}
-
-	if pc.path == "" && pc.dir == "" {
-		return file.Zones{}, f, nil, pc, fmt.Errorf("exactly one of persist or directory is required")
-	}
-	if pc.path != "" && pc.dir != "" {
-		return file.Zones{}, f, nil, pc, fmt.Errorf("persist and directory are mutually exclusive")
-	}
-	if pc.path != "" && len(names) > 1 {
-		return file.Zones{}, f, nil, pc, fmt.Errorf("persist PATH requires a single origin")
-	}
-	if len(catalogZones) > 0 && pc.dir == "" {
-		return file.Zones{}, f, nil, pc, fmt.Errorf("catalog requires directory")
 	}
 
 	return file.Zones{Z: z, Names: names}, f, catalogZones, pc, nil

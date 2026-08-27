@@ -102,7 +102,9 @@ func adaptCorefileForSecondary(src string, opt corefileAdapt) string {
 		depth += open - close
 		i++
 	}
-	return strings.Join(out, "\n")
+	adapted := strings.Join(out, "\n")
+	stripped, _ := stripZonefileBlocks(adapted)
+	return stripped
 }
 
 const (
@@ -170,16 +172,95 @@ func stripClusterSection(local string) string {
 	}
 }
 
-func mergeClusteredCorefile(local, adapted string) string {
-	if strings.TrimSpace(local) == "" {
-		return adapted
+func injectQstat(text string) (string, bool) {
+	if strings.TrimSpace(text) == "" {
+		return text, false
 	}
-	base := stripClusterSection(local)
-	zones := strings.TrimSpace(clusteredBlocks(adapted))
-	if zones == "" {
-		return base
+	lines := strings.Split(text, "\n")
+	var out []string
+	changed := false
+	i := 0
+	for i < len(lines) {
+		line := lines[i]
+		if strings.Count(line, "{") == 0 {
+			out = append(out, line)
+			i++
+			continue
+		}
+		depth := 0
+		start := i
+		for i < len(lines) {
+			depth += strings.Count(lines[i], "{") - strings.Count(lines[i], "}")
+			i++
+			if depth <= 0 {
+				break
+			}
+		}
+		block := lines[start:i]
+		hdr := strings.TrimSpace(block[0])
+		// Snippets like `(common) {` are imported into servers. Putting
+		// qstat in both the snippet and the server loads it twice.
+		if strings.HasPrefix(hdr, "(") {
+			out = append(out, block...)
+			continue
+		}
+		if blockHasDirective(block, "qstat") {
+			out = append(out, block...)
+			continue
+		}
+		indent := blockDirectiveIndent(block)
+		inserted := make([]string, 0, len(block)+1)
+		inserted = append(inserted, block[0], indent+"qstat")
+		inserted = append(inserted, block[1:]...)
+		out = append(out, inserted...)
+		changed = true
 	}
-	return strings.TrimRight(base, "\n") + "\n\n" + clusterBegin + "\n" + zones + "\n" + clusterEnd + "\n"
+	return strings.Join(out, "\n"), changed
+}
+
+func blockHasDirective(block []string, dir string) bool {
+	for _, l := range block {
+		f := strings.Fields(strings.TrimSpace(l))
+		if len(f) > 0 && f[0] == dir {
+			return true
+		}
+	}
+	return false
+}
+
+func blockDirectiveIndent(block []string) string {
+	for _, l := range block[1:] {
+		trim := strings.TrimSpace(l)
+		if trim == "" || strings.HasPrefix(trim, "#") || trim == "}" {
+			continue
+		}
+		return l[:len(l)-len(strings.TrimLeft(l, " \t"))]
+	}
+	return "\t"
+}
+
+func ensureQstatDirective(path string) (bool, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	next, changed := injectQstat(string(b))
+	if !changed {
+		return false, nil
+	}
+	tmp := path + ".qstat-next"
+	if err := os.WriteFile(tmp, []byte(next), 0o640); err != nil {
+		return false, err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return false, err
+	}
+	return true, nil
+}
+
+func mergeClusteredCorefile(local, _ string) string {
+	return stripClusterSection(local)
 }
 
 func remapCorePath(p, primData, primConf, localData, localConf string) string {
@@ -337,16 +418,6 @@ func (a *Admin) attachCorefile(snap *store.Snapshot) {
 	snap.Corefile = text
 	snap.CorefileHash = corefileHash(text)
 	files := collectCorefileFiles(text, filepath.Dir(path))
-	if a.cfg.Data != "" {
-		_ = filepath.Walk(a.cfg.Data, func(p string, info os.FileInfo, err error) error {
-			if err == nil && info != nil && !info.IsDir() && info.Size() <= maxCoreFileBytes {
-				if raw, err := os.ReadFile(p); err == nil {
-					files[p] = raw
-				}
-			}
-			return nil
-		})
-	}
 	if len(files) > 0 {
 		snap.CoreFiles = files
 	}
@@ -372,64 +443,25 @@ func (a *Admin) selfAPIURL(snap store.Snapshot) string {
 	return ""
 }
 
-func (a *Admin) applyCorefile(snap store.Snapshot) (reload bool, err error) {
-	if snap.Corefile == "" || snap.CorefileHash == "" {
-		return false, nil
-	}
-	if prev, _ := a.db.Meta(store.MetaCorefileHash); prev == snap.CorefileHash {
-		return false, nil
-	}
-	opt := corefileAdapt{
-		DB:         a.cfg.DB,
-		Data:       a.cfg.Data,
-		PrimaryDNS: "",
-	}
-	if from := a.primaryTransferFrom(); len(from) > 0 {
-		opt.PrimaryDNS = from[0]
-	}
-	opt.PrimaryIP = hostPart(opt.PrimaryDNS)
-	opt.SelfIP = a.selfListenIP(snap)
-	if u := a.selfAPIURL(snap); u != "" {
-		opt.RedirectURL = u + "/api/v1/auth/oidc/callback"
-	}
-	adapted := adaptCorefileForSecondary(snap.Corefile, opt)
+func (a *Admin) applyCorefile(_ store.Snapshot) (reload bool, err error) {
 	dest := corefilePath()
 	local, err := os.ReadFile(dest)
 	if err != nil {
-		local = nil
+		return false, nil
 	}
-	merged := mergeClusteredCorefile(string(local), adapted)
-	primConf := filepath.Dir(dest)
-	if snap.Corefile != "" {
-		// Primary Corefile path is unknown; assume the usual layout.
-		primConf = "/etc/coredns"
-	}
-	primData := corefileDataDir(snap.Corefile)
-	for path, body := range snap.CoreFiles {
-		if strings.Contains(path, string(os.PathSeparator)+"tls"+string(os.PathSeparator)) || strings.HasSuffix(path, string(os.PathSeparator)+"tls") {
-			continue
-		}
-		out := remapCorePath(path, primData, primConf, a.cfg.Data, filepath.Dir(dest))
-		if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
-			return false, err
-		}
-		if err := os.WriteFile(out, body, 0o644); err != nil {
-			log.Warningf("corefile file %s: %v", out, err)
-		}
-	}
-	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-		return false, err
+	stripped := stripClusterSection(string(local))
+	if stripped == string(local) {
+		return false, nil
 	}
 	tmp := dest + ".next"
-	if err := os.WriteFile(tmp, []byte(merged), 0o640); err != nil {
+	if err := os.WriteFile(tmp, []byte(stripped), 0o640); err != nil {
 		return false, err
 	}
 	if err := os.Rename(tmp, dest); err != nil {
 		_ = os.Remove(tmp)
 		return false, err
 	}
-	_ = a.db.SetMeta(store.MetaCorefileHash, snap.CorefileHash)
-	log.Infof("merged primary zone blocks into Corefile (%s)", snap.CorefileHash[:12])
+	log.Info("stripped leftover cluster Corefile section")
 	return true, nil
 }
 

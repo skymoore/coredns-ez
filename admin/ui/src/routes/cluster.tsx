@@ -46,7 +46,9 @@ export function ClusterPage() {
   const [dns, setDns] = useState("");
   const [nodeName, setNodeName] = useState("");
   const [joinOpen, setJoinOpen] = useState(false);
-  const [rename, setRename] = useState<{ id: string; name: string } | null>(null);
+  const [edit, setEdit] = useState<{ id: string; name: string; api_url: string; dns_addr: string } | null>(null);
+  const [primaryDNS, setPrimaryDNS] = useState("");
+  const [overrideDraft, setOverrideDraft] = useState("");
 
   const mint = useMutation({
     mutationFn: () =>
@@ -64,6 +66,7 @@ export function ClusterPage() {
           dns,
           name: nodeName.trim(),
           api_url: window.location.origin,
+          primary_dns: primaryDNS.trim(),
         }),
       }),
     onSuccess: () => {
@@ -72,16 +75,23 @@ export function ClusterPage() {
     },
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "connect failed"),
   });
-  const renameMut = useMutation({
+  const editMut = useMutation({
     mutationFn: () =>
-      api(`/cluster/members/${rename?.id}`, { method: "PATCH", body: JSON.stringify({ name: rename?.name.trim() }) }),
+      api(`/cluster/members/${edit?.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          name: edit?.name.trim(),
+          api_url: edit?.api_url.trim(),
+          dns_addr: edit?.dns_addr.trim(),
+        }),
+      }),
     onSuccess: () => {
-      toast.success("Name updated");
+      toast.success("Node updated");
       qc.invalidateQueries({ queryKey: ["cluster"] });
       qc.invalidateQueries({ queryKey: ["node"] });
-      setRename(null);
+      setEdit(null);
     },
-    onError: (e) => toast.error(e instanceof ApiError ? e.message : "rename failed"),
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "update failed"),
   });
   const remove = useMutation({
     mutationFn: (id: string) => api(`/cluster/members/${id}`, { method: "DELETE" }),
@@ -90,6 +100,14 @@ export function ClusterPage() {
       setDel(null);
     },
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "remove failed"),
+  });
+  const overrideMut = useMutation({
+    mutationFn: (dns: string) => api("/cluster/primary-dns", { method: "PUT", body: JSON.stringify({ dns }) }),
+    onSuccess: () => {
+      toast.success("Primary DNS for this node updated. Transfers will use the new address.");
+      qc.invalidateQueries({ queryKey: ["cluster"] });
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "update failed"),
   });
 
   const role = node.data?.role;
@@ -102,6 +120,10 @@ export function ClusterPage() {
       setNodeName(node.data.name);
     }
   }, [node.data?.name, nodeName]);
+
+  useEffect(() => {
+    setOverrideDraft(cluster.data?.primary_dns_override || "");
+  }, [cluster.data?.primary_dns_override]);
 
   return (
     <div>
@@ -227,6 +249,22 @@ export function ClusterPage() {
               onChange={(e) => setDns(e.target.value)}
               placeholder="192.0.2.20:53"
             />
+            <p className="text-xs text-muted-foreground">
+              Address the primary should allow AXFR from and NOTIFY. Use this box’s public IP if it is remote.
+            </p>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="primaryDNS">Primary DNS from this node</Label>
+            <Input
+              id="primaryDNS"
+              value={primaryDNS}
+              onChange={(e) => setPrimaryDNS(e.target.value)}
+              placeholder="203.0.113.10:53"
+            />
+            <p className="text-xs text-muted-foreground">
+              Optional. If this node cannot reach the primary’s LAN address, set the public host:port to AXFR from.
+              Stored only on this node.
+            </p>
           </div>
           <Button type="submit" disabled={connect.isPending}>
             Join cluster
@@ -273,8 +311,19 @@ export function ClusterPage() {
                   <TD className="tabular">{formatTime(m.last_seen)}</TD>
                   {role === "primary" ? (
                     <TD className="text-right">
-                      <Button variant="ghost" size="sm" onClick={() => setRename({ id: m.id, name: m.name || "" })}>
-                        Rename
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() =>
+                          setEdit({
+                            id: m.id,
+                            name: m.name || "",
+                            api_url: m.api_url || "",
+                            dns_addr: m.dns_addr || "",
+                          })
+                        }
+                      >
+                        Edit
                       </Button>
                       {m.role !== "primary" ? (
                         <Button variant="ghost" size="sm" onClick={() => setDel(m.id)}>
@@ -322,31 +371,102 @@ export function ClusterPage() {
         </div>
       ) : null}
 
-      {role === "primary" ? <TransferCard canEdit /> : null}
-
-      <Dialog open={!!rename} onOpenChange={(v) => !v && setRename(null)}>
-        <DialogContent title="Rename node" className="w-[min(28rem,calc(100%-2rem))]">
+      {role === "secondary" && joined ? (
+        <div className="mt-8 max-w-lg rounded-lg border border-border p-4">
+          <h2 className="mb-1 text-base font-semibold">Primary DNS for this node</h2>
+          <p className="mb-3 text-sm text-muted-foreground">
+            AXFR/IXFR and the Transfer button use this address to reach the primary. The cluster default is the
+            primary’s advertised LAN DNS
+            {cluster.data?.advertise_dns ? ` (${cluster.data.advertise_dns})` : ""}. Override it when this box is
+            off-LAN. Not replicated to other nodes.
+          </p>
           <form
             className="space-y-3"
             onSubmit={(e) => {
               e.preventDefault();
-              if (rename?.name.trim()) {
-                renameMut.mutate();
+              overrideMut.mutate(overrideDraft.trim());
+            }}
+          >
+            <div className="space-y-2">
+              <Label htmlFor="override-dns">Override host:port</Label>
+              <Input
+                id="override-dns"
+                value={overrideDraft}
+                onChange={(e) => setOverrideDraft(e.target.value)}
+                placeholder={cluster.data?.advertise_dns || "203.0.113.10:53"}
+                className="font-mono"
+              />
+              <p className="text-xs text-muted-foreground">
+                Effective now:{" "}
+                <span className="font-mono">{cluster.data?.primary_dns || "—"}</span>
+                {cluster.data?.primary_dns_override ? " (override)" : " (cluster default)"}. Leave blank to use the
+                advertised address.
+              </p>
+            </div>
+            <Button type="submit" disabled={overrideMut.isPending}>
+              Save
+            </Button>
+          </form>
+        </div>
+      ) : null}
+
+      {role === "primary" ? <TransferCard canEdit /> : null}
+
+      <Dialog open={!!edit} onOpenChange={(v) => !v && setEdit(null)}>
+        <DialogContent title="Edit node" className="w-[min(28rem,calc(100%-2rem))]">
+          <form
+            className="space-y-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (edit?.name.trim() && edit?.api_url.trim() && edit?.dns_addr.trim()) {
+                editMut.mutate();
               }
             }}
           >
             <div className="space-y-2">
-              <Label htmlFor="rename">Cluster name</Label>
+              <Label htmlFor="edit-name">Cluster name</Label>
               <Input
-                id="rename"
-                value={rename?.name ?? ""}
-                onChange={(e) => setRename((r) => (r ? { ...r, name: e.target.value } : r))}
+                id="edit-name"
+                value={edit?.name ?? ""}
+                onChange={(e) => setEdit((r) => (r ? { ...r, name: e.target.value } : r))}
                 placeholder="ns3.dns.rwx.dev"
                 required
               />
             </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-api">API URL</Label>
+              <Input
+                id="edit-api"
+                value={edit?.api_url ?? ""}
+                onChange={(e) => setEdit((r) => (r ? { ...r, api_url: e.target.value } : r))}
+                placeholder="https://ns3.dns.rwx.dev"
+                required
+                className="font-mono"
+              />
+              <p className="text-xs text-muted-foreground">
+                HTTPS or HTTP URL other cluster members use to reach this node’s admin API. Loopback is rejected.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-dns">DNS host:port</Label>
+              <Input
+                id="edit-dns"
+                value={edit?.dns_addr ?? ""}
+                onChange={(e) => setEdit((r) => (r ? { ...r, dns_addr: e.target.value } : r))}
+                placeholder="192.168.8.53:53"
+                required
+                className="font-mono"
+              />
+              <p className="text-xs text-muted-foreground">
+                This node’s DNS address in the roster. For a remote secondary, use the public IP the primary sees on
+                AXFR. Loopback is rejected.
+              </p>
+            </div>
             <div className="flex justify-end">
-              <Button type="submit" disabled={renameMut.isPending || !rename?.name.trim()}>
+              <Button
+                type="submit"
+                disabled={editMut.isPending || !edit?.name.trim() || !edit?.api_url.trim() || !edit?.dns_addr.trim()}
+              >
                 Save
               </Button>
             </div>

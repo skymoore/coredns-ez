@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -112,5 +113,138 @@ func TestRelativeRecordAndPatch(t *testing.T) {
 	}
 	if bytes.Contains(w.Body.Bytes(), []byte("192.0.2.10")) {
 		t.Fatalf("old rdata still present: %s", w.Body.Bytes())
+	}
+}
+
+func TestReplaceApexNSRemovesOriginals(t *testing.T) {
+	a := testAdmin(t)
+	token := loginToken(t, a)
+
+	zbody, _ := json.Marshal(map[string]string{"origin": "example.com.", "type": "primary"})
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/zones", bytes.NewReader(zbody))
+	r.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	a.mux.ServeHTTP(w, r)
+	if w.Code != http.StatusOK && w.Code != http.StatusCreated {
+		t.Fatalf("create zone: %d %s", w.Code, w.Body.Bytes())
+	}
+
+	body, _ := json.Marshal(map[string]any{
+		"name": "@",
+		"type": "NS",
+		"acl":  "",
+		"records": []recordJSON{
+			{Name: "@", Type: "NS", TTL: 300, Rdata: "ns1.dns.example.com."},
+			{Name: "@", Type: "NS", TTL: 300, Rdata: "ns3.dns.example.com."},
+		},
+	})
+	r = httptest.NewRequest(http.MethodPut, "/api/v1/zones/example.com./records", bytes.NewReader(body))
+	r.Header.Set("Authorization", "Bearer "+token)
+	w = httptest.NewRecorder()
+	a.mux.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("replace apex NS: %d %s", w.Code, w.Body.Bytes())
+	}
+
+	r = httptest.NewRequest(http.MethodGet, "/api/v1/zones/example.com./records?name=@&type=NS", nil)
+	r.Header.Set("Authorization", "Bearer "+token)
+	w = httptest.NewRecorder()
+	a.mux.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("list NS: %d %s", w.Code, w.Body.Bytes())
+	}
+	var out struct {
+		Records []recordJSON `json:"records"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Records) != 2 {
+		t.Fatalf("apex NS count = %d %s, want 2", len(out.Records), w.Body.Bytes())
+	}
+	got := map[string]bool{}
+	for _, rec := range out.Records {
+		got[strings.ToLower(rec.Rdata)] = true
+	}
+	if !got["ns1.dns.example.com."] || !got["ns3.dns.example.com."] {
+		t.Fatalf("replaced NS missing: %s", w.Body.Bytes())
+	}
+	if got["ns1.example.com."] {
+		t.Fatalf("original NS still present: %s", w.Body.Bytes())
+	}
+
+	empty, _ := json.Marshal(map[string]any{
+		"name": "@", "type": "NS", "acl": "", "records": []recordJSON{},
+	})
+	r = httptest.NewRequest(http.MethodPut, "/api/v1/zones/example.com./records", bytes.NewReader(empty))
+	r.Header.Set("Authorization", "Bearer "+token)
+	w = httptest.NewRecorder()
+	a.mux.ServeHTTP(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("empty apex NS: %d %s", w.Code, w.Body.Bytes())
+	}
+}
+
+func TestReplaceApexSOAUpdatesMname(t *testing.T) {
+	a := testAdmin(t)
+	token := loginToken(t, a)
+
+	zbody, _ := json.Marshal(map[string]string{"origin": "example.com.", "type": "primary"})
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/zones", bytes.NewReader(zbody))
+	r.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	a.mux.ServeHTTP(w, r)
+	if w.Code != http.StatusOK && w.Code != http.StatusCreated {
+		t.Fatalf("create zone: %d %s", w.Code, w.Body.Bytes())
+	}
+
+	body, _ := json.Marshal(map[string]any{
+		"name": "@",
+		"type": "SOA",
+		"acl":  "",
+		"records": []recordJSON{
+			{Name: "@", Type: "SOA", TTL: 300, Rdata: "ns1.rwx.dev. hostmaster.example.com. 1 7200 600 86400 60"},
+		},
+	})
+	r = httptest.NewRequest(http.MethodPut, "/api/v1/zones/example.com./records", bytes.NewReader(body))
+	r.Header.Set("Authorization", "Bearer "+token)
+	w = httptest.NewRecorder()
+	a.mux.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("replace SOA: %d %s", w.Code, w.Body.Bytes())
+	}
+
+	r = httptest.NewRequest(http.MethodGet, "/api/v1/zones/example.com./records?name=@&type=SOA", nil)
+	r.Header.Set("Authorization", "Bearer "+token)
+	w = httptest.NewRecorder()
+	a.mux.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("list SOA: %d %s", w.Code, w.Body.Bytes())
+	}
+	var out struct {
+		Records []recordJSON `json:"records"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Records) != 1 {
+		t.Fatalf("SOA count = %d %s, want 1", len(out.Records), w.Body.Bytes())
+	}
+	if !strings.Contains(strings.ToLower(out.Records[0].Rdata), "ns1.rwx.dev.") {
+		t.Fatalf("MNAME not updated: %s", w.Body.Bytes())
+	}
+	if strings.Contains(strings.ToLower(out.Records[0].Rdata), "ns1.example.com.") {
+		t.Fatalf("original MNAME still present: %s", w.Body.Bytes())
+	}
+
+	empty, _ := json.Marshal(map[string]any{
+		"name": "@", "type": "SOA", "acl": "", "records": []recordJSON{},
+	})
+	r = httptest.NewRequest(http.MethodPut, "/api/v1/zones/example.com./records", bytes.NewReader(empty))
+	r.Header.Set("Authorization", "Bearer "+token)
+	w = httptest.NewRecorder()
+	a.mux.ServeHTTP(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("empty SOA: %d %s", w.Code, w.Body.Bytes())
 	}
 }

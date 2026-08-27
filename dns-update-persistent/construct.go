@@ -11,35 +11,35 @@ import (
 	"github.com/skymoore/coredns-ez/ixfr"
 )
 
-// New loads origin from seedPath. Used by the API plugin to create a primary
-// at runtime. The caller must AttachIXFR, SetTransfer, SetNext, and register.
-func New(origin, seedPath string, mutable map[uint16]bool) (*UpdatePersist, error) {
+// NewFromRecords serves origin from rrs. Persist is in-memory until SetPersist.
+func NewFromRecords(origin string, rrs []dns.RR, mutable map[uint16]bool) (*UpdatePersist, error) {
 	origin = strings.ToLower(dns.CanonicalName(origin))
-	rrs, err := readZone(seedPath, origin)
-	if err != nil {
-		return nil, err
-	}
 	if soaOf(rrs) == nil {
-		return nil, fmt.Errorf("%s has no SOA at %s", seedPath, origin)
+		return nil, fmt.Errorf("%s has no SOA", origin)
+	}
+	copies := make([]dns.RR, len(rrs))
+	for i, rr := range rrs {
+		copies[i] = dns.Copy(rr)
 	}
 	d := &UpdatePersist{
-		Zone:     origin,
-		seedPath: seedPath,
-		mutable:  mutable,
-		source:   zonereg.SourceAdmin,
-		rrs:      rrs,
+		Zone:    origin,
+		mutable: mutable,
+		source:  zonereg.SourceAdmin,
+		rrs:     copies,
 	}
-	if err := d.swap(rrs); err != nil {
+	if err := d.swap(copies); err != nil {
 		return nil, err
 	}
 	return d, nil
 }
 
-// WriteSeed atomically writes rrs to path. The API uses this to create a
-// brand-new primary before New loads it.
-func WriteSeed(path, origin string, rrs []dns.RR) error {
-	return writeZoneFile(path, origin, rrs)
+// ReadZoneFile parses a master file the same way as the file plugin.
+func ReadZoneFile(path, origin string) ([]dns.RR, error) {
+	return readZone(path, origin)
 }
+
+// SetPersist installs the SQLite (or test) persist backend. Required for mutations.
+func (d *UpdatePersist) SetPersist(fn PersistFunc) { d.persistFn = fn }
 
 // AttachIXFR registers the journal and makes this plugin's Transfer defer to it.
 func (d *UpdatePersist) AttachIXFR(x *ixfr.IXFR) error {
@@ -47,7 +47,7 @@ func (d *UpdatePersist) AttachIXFR(x *ixfr.IXFR) error {
 	d.mu.RLock()
 	rrs := d.rrs
 	d.mu.RUnlock()
-	return x.Register(d.Zone, d.seedPath+".ixfr", rrs)
+	return x.Register(d.Zone, rrs)
 }
 
 // SetTransfer sets the transfer plugin used for NOTIFY.

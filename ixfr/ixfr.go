@@ -27,15 +27,20 @@ const pluginName = "ixfr"
 
 const defaultHistory = 64
 
+// JournalBackend stores the journal text. The admin plugin uses SQLite.
+type JournalBackend interface {
+	Load(origin string) ([]byte, error)
+	Save(origin string, data []byte) error
+}
+
 // New returns an unregistered journal for origin. The API plugin uses this
 // for runtime primaries; Corefile setup still goes through parse().
-func New(origin, path string, history int) *IXFR {
+func New(origin string, history int) *IXFR {
 	if history < 1 {
 		history = defaultHistory
 	}
 	return &IXFR{
 		Zone:    strings.ToLower(dns.CanonicalName(origin)),
-		path:    path,
 		history: history,
 	}
 }
@@ -47,14 +52,16 @@ type IXFR struct {
 	// Zone is the origin this journal belongs to. Empty until Register.
 	Zone string
 
-	// path is the journal file. Empty until Register fills in PATH.ixfr.
-	path string
+	backend JournalBackend
 
 	history int
 
 	mu      sync.Mutex
 	journal *Journal
 }
+
+// SetBackend stores the journal in SQLite (or any blob store) instead of a file.
+func (x *IXFR) SetBackend(b JournalBackend) { x.backend = b }
 
 // ServeDNS implements plugin.Handler. Queries are not ours.
 func (x *IXFR) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
@@ -85,9 +92,9 @@ func (x *IXFR) Transfer(zone string, serial uint32) (<-chan []dns.RR, error) {
 	return ch, nil
 }
 
-// Register attaches this journal to origin, loading PATH (or defaultPath) and
-// reconciling it against the currently served zone. Safe to call from OnStartup.
-func (x *IXFR) Register(origin, defaultPath string, current []dns.RR) error {
+// Register attaches this journal to origin and reconciles it against the
+// currently served zone. Safe to call from OnStartup.
+func (x *IXFR) Register(origin string, current []dns.RR) error {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 
@@ -96,23 +103,21 @@ func (x *IXFR) Register(origin, defaultPath string, current []dns.RR) error {
 		return fmt.Errorf("ixfr already registered for %s, not %s", x.Zone, origin)
 	}
 	x.Zone = origin
-	if x.path == "" {
-		x.path = defaultPath
-	}
 	if x.history <= 0 {
 		x.history = defaultHistory
 	}
 
-	j, err := loadJournal(x.path, origin, x.history, current)
+	j, err := loadJournal(origin, x.history, current, x.backend)
 	if err != nil {
-		log.Warningf("loading journal %s for %s: %v (serving without IXFR history)", x.path, origin, err)
-		j = newJournal(x.path, origin, x.history, current)
+		log.Warningf("loading journal for %s: %v (serving without IXFR history)", origin, err)
+		j = newJournal(origin, x.history, current)
+		j.backend = x.backend
 	}
 	x.journal = j
 	if soa := soaOf(j.current); soa != nil {
 		serialGauge.WithLabelValues(origin).Set(float64(soa.Serial))
 	}
-	log.Infof("IXFR journal for %s at %s (%d increments, serial %d)", origin, x.path, len(j.incs), serialOf(j.current))
+	log.Infof("IXFR journal for %s (%d increments, serial %d)", origin, len(j.incs), serialOf(j.current))
 	return nil
 }
 

@@ -99,3 +99,53 @@ func TestTransferSnapshot(t *testing.T) {
 		t.Fatalf("replica %+v", got)
 	}
 }
+
+func TestRecursionHTTPAndSnapshot(t *testing.T) {
+	a := testAdmin(t)
+	tok := loginToken(t, a)
+	body, _ := json.Marshal(map[string]any{"networks": []string{"192.168.0.0/16", "10.9.8.7"}})
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/recursion", bytes.NewReader(body))
+	r.Header.Set("Authorization", "Bearer "+tok)
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	a.mux.ServeHTTP(w, r)
+	if w.Code != http.StatusOK || !bytes.Contains(w.Body.Bytes(), []byte("10.9.8.7/32")) {
+		t.Fatalf("put recursion: %d %s", w.Code, w.Body.Bytes())
+	}
+	r = httptest.NewRequest(http.MethodGet, "/api/v1/recursion", nil)
+	r.Header.Set("Authorization", "Bearer "+tok)
+	w = httptest.NewRecorder()
+	a.mux.ServeHTTP(w, r)
+	if w.Code != http.StatusOK || !bytes.Contains(w.Body.Bytes(), []byte("192.168.0.0/16")) {
+		t.Fatalf("get recursion: %d %s", w.Code, w.Body.Bytes())
+	}
+
+	snap, err := a.db.Snapshot()
+	if err != nil || len(snap.Recursion) != 2 {
+		t.Fatalf("snap %+v %v", snap.Recursion, err)
+	}
+	s2, err := store.Open(t.TempDir() + "/rec.sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s2.Close() })
+	if err := s2.ApplySnapshot(snap); err != nil {
+		t.Fatal(err)
+	}
+	got := s2.Recursion()
+	if len(got) != 2 || got[0] != "192.168.0.0/16" {
+		t.Fatalf("replica %+v", got)
+	}
+	empty, _ := json.Marshal(map[string]any{"networks": []string{}})
+	r = httptest.NewRequest(http.MethodPut, "/api/v1/recursion", bytes.NewReader(empty))
+	r.Header.Set("Authorization", "Bearer "+tok)
+	r.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	a.mux.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("empty recursion: %d %s", w.Code, w.Body.Bytes())
+	}
+	if n := a.db.Recursion(); len(n) != 0 {
+		t.Fatalf("want deny-all, got %+v", n)
+	}
+}

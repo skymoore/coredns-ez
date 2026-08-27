@@ -3,8 +3,6 @@ package secondarypersist
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -40,11 +38,9 @@ func TestTransferAXFRAndPersist(t *testing.T) {
 	})
 	defer server.Close()
 
-	dir := t.TempDir()
 	z := file.NewZone(transferTestZone, "stdin")
 	z.TransferFrom = []string{server.Addr}
 	s := newTestSecondary(t, transferTestZone, z, false)
-	s.persistDir = dir
 
 	if err := s.transferIn(transferTestZone, z, nil); err != nil {
 		t.Fatalf("transferIn: %v", err)
@@ -53,12 +49,12 @@ func TestTransferAXFRAndPersist(t *testing.T) {
 		t.Fatalf("expected serial %d", serial)
 	}
 
-	waitForPersist(t, s, filepath.Join(dir, persistFileName(transferTestZone)), serial)
+	waitForPersist(t, s, transferTestZone, serial)
 
 	dst := file.NewZone(transferTestZone, "stdin")
 	s.loadIfPresent(transferTestZone, dst)
 	if zoneSOA(dst) == nil || zoneSOA(dst).Serial != serial {
-		t.Fatal("expected reload from persist file")
+		t.Fatal("expected reload from sqlite persist")
 	}
 
 	req := new(dns.Msg)
@@ -236,21 +232,19 @@ func TestShouldTransferWraparound(t *testing.T) {
 	}
 }
 
-func waitForPersist(t *testing.T, s *SecondaryPersist, path string, serial uint32) {
+func waitForPersist(t *testing.T, s *SecondaryPersist, origin string, serial uint32) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		s.persistMu.Lock()
-		ok := s.hasWritten[path] && s.lastSerial[path] == serial
+		ok := s.hasWritten[origin] && s.lastSerial[origin] == serial
 		s.persistMu.Unlock()
 		if ok {
-			if _, err := os.Stat(path); err == nil {
-				return
-			}
+			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("timed out waiting for persist of %s serial %d", path, serial)
+	t.Fatalf("timed out waiting for persist of %s serial %d", origin, serial)
 }
 
 func newTestSecondary(t *testing.T, origin string, z *file.Zone, catalog bool) *SecondaryPersist {
@@ -262,7 +256,8 @@ func newTestSecondary(t *testing.T, origin string, z *file.Zone, catalog bool) *
 	s := newSecondaryPersist(file.Zones{
 		Z:     map[string]*file.Zone{origin: z},
 		Names: []string{origin},
-	}, fall.F{}, catalogZones, persistConfig{dir: t.TempDir()})
+	}, fall.F{}, catalogZones, persistConfig{})
+	s.SetRecordStore(newMemStore())
 	t.Cleanup(s.closePersist)
 	t.Cleanup(s.stopDynamicZones)
 	return s
