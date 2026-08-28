@@ -43,6 +43,14 @@ insert_plugins() {
   local cfg="$1"
   grep -q '^file:file$' "$cfg" || die "plugin.cfg is missing file:file"
   grep -q '^secondary:secondary$' "$cfg" || die "plugin.cfg is missing secondary:secondary"
+  # Replace the in-tree cache in place with the split-horizon variant. Same
+  # slot keeps cache ahead of admin on the chain; idempotent.
+  if grep -q '^cache:cache$' "$cfg"; then
+    awk -v m="$PLUGIN_MODULE" '
+      { if ($0 == "cache:cache") print "cache:" m "/split-horizon-cache"; else print }
+    ' "$cfg" >"${cfg}.tmp"
+    mv "${cfg}.tmp" "$cfg"
+  fi
   if ! grep -q "^dns-update-persistent:${PLUGIN_MODULE}/dns-update-persistent\$" "$cfg"; then
     insert_after "$cfg" '^file:file$' "dns-update-persistent:${PLUGIN_MODULE}/dns-update-persistent"
     insert_after "$cfg" '^dns-update-persistent:' "ixfr:${PLUGIN_MODULE}/ixfr"
@@ -274,7 +282,9 @@ cmd_package() {
     plugins_out="$("${PACKAGE_WORK}/${bin}" -plugins)"
     log "$plugins_out"
     local want
-    for want in dns-update-persistent ixfr admin secondary-persistent file secondary kubernetes; do
+    # -plugins lists registered names (plugin.Register), not plugin.cfg lines:
+    # split-horizon-cache registers as "cache".
+    for want in dns-update-persistent ixfr admin secondary-persistent cache file secondary kubernetes; do
       grep -F -q "$want" <<<"$plugins_out" || die "binary is missing plugin: $want"
     done
     "${PACKAGE_WORK}/${bin}" -version
