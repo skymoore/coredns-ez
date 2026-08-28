@@ -45,6 +45,7 @@ COPY go.mod go.sum ./
 COPY dns-update-persistent ./dns-update-persistent
 COPY ixfr ./ixfr
 COPY secondary-persistent ./secondary-persistent
+COPY split-horizon-cache ./split-horizon-cache
 COPY admin ./admin
 COPY --from=ui /ui/dist ./admin/ui/dist
 COPY internal ./internal
@@ -54,7 +55,12 @@ WORKDIR /src/coredns
 # plugin.cfg order is the request chain. These two must sit next to the
 # in-tree plugins they replace rather than at the end (COREDNS_PLUGINS
 # would append them after whoami/forward, which is the wrong slot).
+# split-horizon-cache replaces the in-tree cache in place so it keeps the
+# original slot: cache must stay in front of admin on the :53 chain.
 RUN sed -i \
+    -e 's|^cache:cache$|cache:github.com/skymoore/coredns-ez/split-horizon-cache|' \
+    plugin.cfg \
+    && sed -i \
     -e '/^file:file$/a dns-update-persistent:github.com/skymoore/coredns-ez/dns-update-persistent' \
     plugin.cfg \
     && sed -i \

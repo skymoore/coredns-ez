@@ -179,6 +179,12 @@ Unbound (or another recursor) still caches recursion. Do not add
 `serve_stale` on denials. Re-running `install.sh` inserts `disable denial`
 into an existing cache block that lacks it.
 
+The shipped binary replaces the in-tree `cache` with `split-horizon-cache`:
+entries are keyed by `(qname, qtype, class, source /24)` so an answer served
+to a LAN client and one served to a public client never overwrite each other.
+`netmask BITS` / `netmask6 BITS` tune the bucket widths (`netmask 0` shares
+one bucket for all IPv4).
+
 ## AXFR
 
 `transfer { to 127.0.0.1 }` is in the default Corefile so the plugin exists.

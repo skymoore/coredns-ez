@@ -547,6 +547,7 @@ stage_admin() {
 	stage_qstat "$token"
 	stage_cluster_dns "$token" "$stoken"
 	stage_split_horizon "$token"
+	stage_split_horizon_cache "$token"
 }
 
 stage_dnssec_enable() {
@@ -887,6 +888,100 @@ stage_split_horizon() {
 	assert_no_rr "$PRIMARY" "$NAS_OWNER" A "$NAS_INTERNAL" "public client does not get internal-only nas"
 	assert_rr "$INTERNAL_DNS" "$NAS_OWNER" A "$NAS_INTERNAL" "internal client gets internal-only nas"
 	assert_rr "$INTERNAL_DNS" "$API_OWNER" A "$API_ADDR" "internal client still sees public-only www"
+}
+
+stage_split_horizon_cache() {
+	local token="$1"
+	echo "-- split-horizon-cache: per-source keys in front of admin"
+
+	# Dedicated origin served through the cache block in the Corefile.
+	local resp code
+	resp=$(curl -sS -w '\n%{http_code}' -X POST "$API_PRIMARY/api/v1/zones" \
+		-H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+		-d "{\"origin\":\"$CSPLIT_ORIGIN\",\"type\":\"primary\"}")
+	code=$(api_code "$resp")
+	if [[ "$code" == "200" || "$code" == "201" || "$code" == "409" ]]; then
+		pass "POST /api/v1/zones $CSPLIT_ORIGIN"
+	else
+		fail "POST /api/v1/zones $CSPLIT_ORIGIN" "code=$code body=$(api_body "$resp")"
+		return
+	fi
+
+	local ok=0 i
+	for i in $(seq 1 40); do
+		if [[ -n "$(rr_values "$PRIMARY" "$CSPLIT_ORIGIN" SOA || true)" ]]; then
+			ok=1
+			break
+		fi
+		sleep 0.5
+	done
+	if [[ "$ok" == "1" ]]; then
+		pass "cache-split origin answers SOA"
+	else
+		fail "cache-split origin answers SOA"
+		return
+	fi
+
+	resp=$(curl -sS -w '\n%{http_code}' -X POST "$API_PRIMARY/api/v1/zones/${CSPLIT_ORIGIN}/records" \
+		-H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+		-d "{\"name\":\"csplit\",\"type\":\"A\",\"ttl\":5,\"rdata\":\"$CSPLIT_PUBLIC\"}")
+	code=$(api_code "$resp")
+	if [[ "$code" == "201" ]]; then
+		pass "POST public A $CSPLIT_OWNER"
+	else
+		fail "POST public A $CSPLIT_OWNER" "code=$code body=$(api_body "$resp")"
+		return
+	fi
+
+	resp=$(curl -sS -w '\n%{http_code}' -X POST "$API_PRIMARY/api/v1/zones/${CSPLIT_ORIGIN}/records" \
+		-H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+		-d "{\"name\":\"csplit\",\"type\":\"A\",\"ttl\":5,\"rdata\":\"$CSPLIT_INTERNAL\",\"acl\":\"internal\"}")
+	code=$(api_code "$resp")
+	if [[ "$code" == "201" ]]; then
+		pass "POST ACL A $CSPLIT_OWNER"
+	else
+		fail "POST ACL A $CSPLIT_OWNER" "code=$code body=$(api_body "$resp")"
+		return
+	fi
+
+	# Prime the public bucket first. The internal-source client must still get
+	# its own view answer: with a name-only cache key the cached public answer
+	# would replay here.
+	assert_rr_from "172.30.53.30" "$PRIMARY" "$CSPLIT_OWNER" A "$CSPLIT_PUBLIC" "cache: public source gets public A"
+	assert_rr_from "10.53.0.30" "$PRIMARY" "$CSPLIT_OWNER" A "$CSPLIT_INTERNAL" "cache: internal source gets view A (per-source key)"
+	assert_rr_from "172.30.53.30" "$PRIMARY" "$CSPLIT_OWNER" A "$CSPLIT_PUBLIC" "cache: public source still gets public A"
+
+	# Repeat inside one bucket must hit the cache, not the upstream.
+	local hits0 hits1
+	hits0=$(cache_hits_total)
+	assert_rr_from "10.53.0.30" "$PRIMARY" "$CSPLIT_OWNER" A "$CSPLIT_INTERNAL" "cache: internal source repeat stable"
+	hits1=$(cache_hits_total)
+	if (( hits1 > hits0 )); then
+		pass "cache: same-bucket repeat served from cache"
+	else
+		fail "cache: same-bucket repeat served from cache" "hits $hits0 -> $hits1"
+	fi
+
+	# Within the cache TTL the old answer is replayed; after it expires the
+	# refreshed value appears. Proves caching is active and bounded.
+	if ! wait_rr_from "172.30.53.30" "$PRIMARY" "$CSPLIT_OWNER" A "$CSPLIT_PUBLIC" 20; then
+		fail "cache: re-prime public bucket"
+		return
+	fi
+	resp=$(curl -sS -w '\n%{http_code}' -X PUT "$API_PRIMARY/api/v1/zones/${CSPLIT_ORIGIN}/records" \
+		-H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+		-d "{\"name\":\"csplit\",\"type\":\"A\",\"records\":[{\"name\":\"csplit\",\"type\":\"A\",\"ttl\":5,\"rdata\":\"$CSPLIT_UPDATED\"}]}")
+	code=$(api_code "$resp")
+	if [[ "$code" != "200" ]]; then
+		fail "PUT replace $CSPLIT_OWNER" "code=$code body=$(api_body "$resp")"
+		return
+	fi
+	assert_rr_from "172.30.53.30" "$PRIMARY" "$CSPLIT_OWNER" A "$CSPLIT_PUBLIC" "cache: stale public A served within TTL"
+	if wait_rr_from "172.30.53.30" "$PRIMARY" "$CSPLIT_OWNER" A "$CSPLIT_UPDATED" 20; then
+		pass "cache: refreshed public A after TTL expiry"
+	else
+		fail "cache: refreshed public A after TTL expiry"
+	fi
 }
 
 stage_primary_restart() {

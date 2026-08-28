@@ -27,6 +27,11 @@ SPLIT_PUBLIC="${SPLIT_PUBLIC:-192.0.2.40}"
 SPLIT_INTERNAL="${SPLIT_INTERNAL:-10.8.0.40}"
 NAS_OWNER="${NAS_OWNER:-nas.it-api.example.}"
 NAS_INTERNAL="${NAS_INTERNAL:-10.8.0.9}"
+CSPLIT_ORIGIN="${CSPLIT_ORIGIN:-cache-split.example.}"
+CSPLIT_OWNER="${CSPLIT_OWNER:-csplit.cache-split.example.}"
+CSPLIT_PUBLIC="${CSPLIT_PUBLIC:-192.0.2.70}"
+CSPLIT_INTERNAL="${CSPLIT_INTERNAL:-10.8.0.70}"
+CSPLIT_UPDATED="${CSPLIT_UPDATED:-192.0.2.71}"
 METRICS_PRIMARY="${METRICS_PRIMARY:-http://172.30.53.10:9153/metrics}"
 METRICS_SECONDARY="${METRICS_SECONDARY:-http://172.30.53.20:9153/metrics}"
 
@@ -235,6 +240,29 @@ assert_no_rr_from() {
 	fi
 	fail "$label" "src=$src still has '$expect' in: $got"
 	return 1
+}
+
+# Poll for an answer from an explicit source address (dig -b).
+wait_rr_from() {
+	local src="$1" at="$2" name="$3" type="$4" expect="$5" timeout="${6:-20}"
+	local start now got
+	start=$(date +%s)
+	while true; do
+		got=$(dig "${DIG_OPTS[@]}" -b "$src" @"$at" +short "$name" "$type" 2>/dev/null || true)
+		if printf '%s\n' "$got" | grep -Fqx "$expect"; then
+			return 0
+		fi
+		now=$(date +%s)
+		if (( now - start >= timeout )); then
+			return 1
+		fi
+		sleep 0.5
+	done
+}
+
+# Sum of coredns cache hit counters (all servers/zones/views).
+cache_hits_total() {
+	curl -sS "$METRICS_PRIMARY" 2>/dev/null | awk '/^coredns_cache_hits_total/ {s += $NF} END {print s+0}'
 }
 
 # Substring match on dig +short (presentation of LOC/HTTPS/SVCB/NAPTR is not stable).

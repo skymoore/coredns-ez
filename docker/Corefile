@@ -11,6 +11,9 @@
 # If you add `cache` on the `.` block (same chain as admin), include
 # `disable denial`. Cache runs before admin, so a cached NODATA for
 # `_acme-challenge` is served after the TXT exists (DNS-01).
+# The shipped `cache` is split-horizon-aware: keys include the client's
+# source /24 (v6 /64), so LAN and public answers don't overwrite each
+# other. Tune with `netmask BITS` / `netmask6 BITS` if needed.
 #
 # Production DoH/UI: see docker/Corefile.tls and docs/deploy.md.
 # Override this file with -v ./Corefile:/etc/coredns/Corefile

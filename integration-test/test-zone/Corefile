@@ -31,6 +31,18 @@ https://.:8443 {
 	}
 }
 
+# split-horizon-cache proof: cache in front of admin on its own origin.
+# cache-split.example. is created via the API; short TTLs so the stale-then-
+# fresh check completes inside one test stage. Source-address keying keeps
+# the internal view answer from leaking to public-source clients.
+cache-split.example. {
+	cache 10 {
+		disable denial
+		netmask 24
+	}
+	admin
+}
+
 # Primary: dns-update-persistent owns example.com.
 # Do not also configure file, auto, secondary, or secondary-persistent here.
 example.com {

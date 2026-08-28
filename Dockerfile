@@ -44,6 +44,7 @@ COPY go.mod go.sum ./
 COPY dns-update-persistent ./dns-update-persistent
 COPY ixfr ./ixfr
 COPY secondary-persistent ./secondary-persistent
+COPY split-horizon-cache ./split-horizon-cache
 COPY admin ./admin
 COPY --from=ui /ui/dist ./admin/ui/dist
 COPY internal ./internal
@@ -51,6 +52,9 @@ COPY patches ./patches
 
 WORKDIR /src/coredns
 RUN sed -i \
+    -e 's|^cache:cache$|cache:github.com/skymoore/coredns-ez/split-horizon-cache|' \
+    plugin.cfg \
+    && sed -i \
     -e '/^file:file$/a dns-update-persistent:github.com/skymoore/coredns-ez/dns-update-persistent' \
     plugin.cfg \
     && sed -i \
