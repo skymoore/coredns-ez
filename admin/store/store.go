@@ -58,7 +58,11 @@ func Open(path string) (*Store, error) {
 	}
 	_ = f.Close()
 
-	dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)", path)
+	// Do not put foreign_keys=1 in the DSN. AutoMigrate rebuilds tables on
+	// SQLite; with FKs on, DROP users CASCADE-deletes api_tokens (DNS-01
+	// webhook secrets vanish on restart). GORM's migrator flag is not enough
+	// because the DSN pragma is applied on every connection.
+	dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)", path)
 	gdb, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		Logger:                                   logger.Default.LogMode(logger.Silent),
 		DisableForeignKeyConstraintWhenMigrating: true,
@@ -71,12 +75,20 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	sqlDB.SetMaxOpenConns(1)
+	if _, err := sqlDB.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
+		_ = sqlDB.Close()
+		return nil, err
+	}
 	s := &Store{gdb: gdb, db: sqlDB, path: path}
 	if err := s.dedupeFilterFeeds(); err != nil {
 		_ = sqlDB.Close()
 		return nil, err
 	}
 	if err := gdb.AutoMigrate(schemaModels()...); err != nil {
+		_ = sqlDB.Close()
+		return nil, err
+	}
+	if _, err := sqlDB.Exec(`PRAGMA foreign_keys = ON`); err != nil {
 		_ = sqlDB.Close()
 		return nil, err
 	}

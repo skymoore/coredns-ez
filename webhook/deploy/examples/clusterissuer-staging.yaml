@@ -19,3 +19,4 @@ spec:
               tokenSecretRef:
                 name: coredns-api-token
                 key: token
+                namespace: cert-manager

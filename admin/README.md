@@ -64,6 +64,15 @@ admin {
 * `dns` is the primary’s DNS address on a secondary (`HOST:PORT`).
 * Put *admin* in both the `https://.:443` block and the `.:53` block so DoH and UDP/TCP share the zone manager.
 
+*cache* on that `:53` block runs **before** *admin*. A cached NODATA/NXDOMAIN
+is served after sqlite grows a record (UI shows it, `dig` does not). Always:
+
+```
+cache {
+    disable denial
+}
+```
+
 ## Compilation
 
 ```

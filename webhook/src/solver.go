@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/cert-manager/cert-manager/pkg/acme/webhook"
 	"github.com/cert-manager/cert-manager/pkg/acme/webhook/apis/acme/v1alpha1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -14,9 +16,12 @@ import (
 )
 
 type solver struct {
-	client  *kubernetes.Clientset
+	client  kubernetes.Interface
 	dial    func(base, token string) *ezClient
 	tokenFn func(ctx context.Context, cfg solverConfig, challengeNS string) (string, error)
+	// podNS is the webhook's own namespace (cert-manager). ClusterIssuer
+	// secrets live here; Challenge.ResourceNamespace is the Certificate ns.
+	podNS string
 }
 
 var _ webhook.Solver = (*solver)(nil)
@@ -32,7 +37,18 @@ func (s *solver) Initialize(kubeClientConfig *rest.Config, _ <-chan struct{}) er
 	if s.dial == nil {
 		s.dial = newClient
 	}
+	if s.podNS == "" {
+		s.podNS = readPodNamespace()
+	}
 	return nil
+}
+
+func readPodNamespace() string {
+	b, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }
 
 func (s *solver) Present(ch *v1alpha1.ChallengeRequest) error {
@@ -102,12 +118,22 @@ func (s *solver) token(ctx context.Context, cfg solverConfig, challengeNS string
 		ns = sec.Namespace
 	}
 	if ns == "" {
+		ns = s.podNS
+	}
+	if ns == "" {
 		return "", fmt.Errorf("token secret namespace is empty")
 	}
 	if s.client == nil {
 		return "", fmt.Errorf("kubernetes client not initialized")
 	}
 	secret, err := s.client.CoreV1().Secrets(ns).Get(ctx, sec.Name, metav1.GetOptions{})
+	if err != nil && sec.Namespace == "" && s.podNS != "" && s.podNS != ns &&
+		(apierrors.IsNotFound(err) || apierrors.IsForbidden(err)) {
+		secret, err = s.client.CoreV1().Secrets(s.podNS).Get(ctx, sec.Name, metav1.GetOptions{})
+		if err == nil {
+			ns = s.podNS
+		}
+	}
 	if err != nil {
 		return "", fmt.Errorf("secret %s/%s: %w", ns, sec.Name, err)
 	}

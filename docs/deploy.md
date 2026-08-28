@@ -163,6 +163,22 @@ Mint an operator API token in the UI, put it in Secret `coredns-api-token`
 key `token` in `cert-manager`, then `kubectl apply -k webhook/deploy/examples`.
 ClusterIssuer name is `coredns`. Details: [webhook/README.md](../webhook/README.md).
 
+If the `:53` block uses `cache` on the same chain as `admin`, it must
+`disable denial`. Cache runs **before** admin (plugin.cfg order, not
+Corefile order). A cached NODATA for `_acme-challenge` is served after
+the webhook writes the TXT; the UI shows the record, `dig @ns` does not.
+The installer seeds:
+
+```
+cache {
+	disable denial
+}
+```
+
+Unbound (or another recursor) still caches recursion. Do not add
+`serve_stale` on denials. Re-running `install.sh` inserts `disable denial`
+into an existing cache block that lacks it.
+
 ## AXFR
 
 `transfer { to 127.0.0.1 }` is in the default Corefile so the plugin exists.

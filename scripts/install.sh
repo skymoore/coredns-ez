@@ -251,6 +251,55 @@ transfer_block() {
 	printf '%stransfer {\n%s\tto 127.0.0.1\n%s}\n' "$indent" "$indent" "$indent"
 }
 
+# cache runs before admin (plugin.cfg). A cached NODATA/NXDOMAIN is served
+# after sqlite grows a record (DNS-01 _acme-challenge TXT). Unbound still
+# caches recursion. Always disable the denial cache on the admin block.
+cache_block() {
+	indent=$1
+	printf '%scache {\n%s\tdisable denial\n%s}\n' "$indent" "$indent" "$indent"
+}
+
+# Bare `cache` or a cache { } without disable denial on an already-seeded Corefile.
+fix_cache_denial() {
+	corefile="${CONF_DIR}/Corefile"
+	[ -f "$corefile" ] || return 0
+	grep -q 'disable denial' "$corefile" && return 0
+	grep -qE '^[[:space:]]*cache([ \t]|$)' "$corefile" || return 0
+	tmp="$(mktemp)"
+	awk '
+		/disable denial/ { has = 1 }
+		{
+			if (!has && $0 ~ /^[[:space:]]*cache[[:space:]]*$/) {
+				indent = $0
+				sub(/cache.*/, "", indent)
+				print indent "cache {"
+				print indent "\tdisable denial"
+				print indent "}"
+				changed = 1
+				next
+			}
+			if (!has && $0 ~ /^[[:space:]]*cache([ \t]+[0-9]+)?[ \t]*\{/) {
+				print
+				indent = $0
+				sub(/cache.*/, "", indent)
+				print indent "\tdisable denial"
+				changed = 1
+				next
+			}
+			print
+		}
+		END { if (changed) exit 0; exit 1 }
+	' "$corefile" >"$tmp" || {
+		rm -f "$tmp"
+		return 0
+	}
+	cat "$tmp" >"$corefile"
+	rm -f "$tmp"
+	chown "$USER_NAME:$USER_NAME" "$corefile"
+	chmod 640 "$corefile"
+	printf 'added cache { disable denial } in %s (denial cache hides new auth records)\n' "$corefile"
+}
+
 # Rewrite `transfer { to ... }` one-liners in an already-seeded Corefile.
 fix_oneline_transfer() {
 	corefile="${CONF_DIR}/Corefile"
@@ -288,6 +337,7 @@ write_corefile() {
 	if [ -f "$corefile" ] && [ -x "${LIB_DIR}/coredns" ]; then
 		printf 'keep existing %s\n' "$corefile"
 		fix_oneline_transfer
+		fix_cache_denial
 		return
 	fi
 	if [ -f "$corefile" ]; then
@@ -315,7 +365,7 @@ $(lan_view)
 	qstat
 	admin
 	forward . 127.0.0.1:${UNBOUND_PORT}
-	cache
+$(cache_block "	")
 $(transfer_block "	")
 }
 . {

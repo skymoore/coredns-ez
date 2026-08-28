@@ -8,7 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/coredns/coredns/plugin/pkg/response"
 	"github.com/coredns/coredns/plugin/test"
+	"github.com/coredns/coredns/request"
 	"github.com/miekg/dns"
 )
 
@@ -132,6 +134,103 @@ func TestDNSSECEnableSignsAndDNSKEY(t *testing.T) {
 	for _, rr := range rw.msg.Answer {
 		if _, ok := rr.(*dns.DNSKEY); ok {
 			t.Fatal("DNSKEY still served after disable")
+		}
+	}
+}
+
+func TestBlackLieNSECOmitsQueriedType(t *testing.T) {
+	mustOmit := func(bitmap []uint16, t uint16) bool {
+		for _, x := range bitmap {
+			if x == t {
+				return false
+			}
+		}
+		return true
+	}
+	has := func(bitmap []uint16, t uint16) bool { return !mustOmit(bitmap, t) }
+
+	soaQ := new(dns.Msg)
+	soaQ.SetQuestion("_acme-challenge.test.example.com.", dns.TypeSOA)
+	st := request.Request{Req: soaQ, Zone: "example.com."}
+	nsec := blackLieNSEC(st, "example.com.", response.NoData)
+	if nsec == nil {
+		t.Fatal("expected NSEC")
+	}
+	if !mustOmit(nsec.TypeBitMap, dns.TypeSOA) {
+		t.Fatalf("non-apex SOA NODATA must not claim SOA: %v", nsec.TypeBitMap)
+	}
+	if has(nsec.TypeBitMap, dns.TypeNS) || has(nsec.TypeBitMap, dns.TypeDNSKEY) {
+		t.Fatalf("non-apex NSEC must not claim NS/DNSKEY: %v", nsec.TypeBitMap)
+	}
+	if !has(nsec.TypeBitMap, dns.TypeNSEC) || !has(nsec.TypeBitMap, dns.TypeRRSIG) {
+		t.Fatalf("NSEC/RRSIG missing: %v", nsec.TypeBitMap)
+	}
+
+	txtQ := new(dns.Msg)
+	txtQ.SetQuestion("_acme-challenge.test.example.com.", dns.TypeTXT)
+	st = request.Request{Req: txtQ, Zone: "example.com."}
+	nsec = blackLieNSEC(st, "example.com.", response.NameError)
+	if !mustOmit(nsec.TypeBitMap, dns.TypeTXT) {
+		t.Fatalf("TXT NXDOMAIN must not claim TXT: %v", nsec.TypeBitMap)
+	}
+
+	apexTXT := new(dns.Msg)
+	apexTXT.SetQuestion("example.com.", dns.TypeTXT)
+	st = request.Request{Req: apexTXT, Zone: "example.com."}
+	nsec = blackLieNSEC(st, "example.com.", response.NoData)
+	if !mustOmit(nsec.TypeBitMap, dns.TypeTXT) {
+		t.Fatalf("apex TXT NODATA must not claim TXT: %v", nsec.TypeBitMap)
+	}
+	if !has(nsec.TypeBitMap, dns.TypeSOA) || !has(nsec.TypeBitMap, dns.TypeDNSKEY) {
+		t.Fatalf("apex NSEC should still claim SOA/DNSKEY: %v", nsec.TypeBitMap)
+	}
+}
+
+func TestDNSSECNoDataOmitsQueriedType(t *testing.T) {
+	a := testAdmin(t)
+	tok := loginToken(t, a)
+	create := httptest.NewRequest(http.MethodPost, "/api/v1/zones", strings.NewReader(`{"origin":"example.com.","type":"primary"}`))
+	create.Header.Set("Authorization", "Bearer "+tok)
+	create.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	a.mux.ServeHTTP(w, create)
+	if w.Code != http.StatusOK && w.Code != http.StatusCreated {
+		t.Fatalf("create zone: %d %s", w.Code, w.Body.Bytes())
+	}
+	en := httptest.NewRequest(http.MethodPost, "/api/v1/zones/example.com./dnssec", nil)
+	en.Header.Set("Authorization", "Bearer "+tok)
+	w = httptest.NewRecorder()
+	a.mux.ServeHTTP(w, en)
+	if w.Code != http.StatusCreated && w.Code != http.StatusOK {
+		t.Fatalf("enable: %d %s", w.Code, w.Body.Bytes())
+	}
+
+	m := new(dns.Msg)
+	m.SetQuestion("_acme-challenge.test.example.com.", dns.TypeSOA)
+	m.SetEdns0(1232, true)
+	rw := &captureRW{ResponseWriter: test.ResponseWriter{RemoteIP: "8.8.8.8"}}
+	chain := &adminChain{Admin: a, next: a.Next}
+	if _, err := chain.ServeDNS(context.Background(), rw, m); err != nil {
+		t.Fatal(err)
+	}
+	if rw.msg == nil {
+		t.Fatal("no response")
+	}
+	if rw.msg.Rcode != dns.RcodeSuccess {
+		t.Fatalf("rcode %d", rw.msg.Rcode)
+	}
+	var nsec *dns.NSEC
+	for _, rr := range rw.msg.Ns {
+		if n, ok := rr.(*dns.NSEC); ok {
+			nsec = n
+		}
+	}
+	if nsec == nil {
+		t.Fatalf("expected NSEC in authority: %v", rw.msg.Ns)
+	}
+	for _, b := range nsec.TypeBitMap {
+		if b == dns.TypeSOA {
+			t.Fatalf("SOA present in NSEC bitmap %v", nsec.TypeBitMap)
 		}
 	}
 }

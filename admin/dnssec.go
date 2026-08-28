@@ -145,13 +145,13 @@ func generateCSK(origin string) (store.DNSSECKey, error) {
 func dnssecInfoJSON(k store.DNSSECKey) map[string]any {
 	algName := dns.AlgorithmToString[uint8(k.Algorithm)]
 	out := map[string]any{
-		"enabled":       true,
-		"algorithm":     algName,
-		"key_tag":       k.KeyTag,
-		"flags":         k.Flags,
-		"protocol":      3,
-		"dnskey":        strings.TrimSpace(k.Public),
-		"max_sig_life":  int((8 * 24 * time.Hour).Seconds()),
+		"enabled":      true,
+		"algorithm":    algName,
+		"key_tag":      k.KeyTag,
+		"flags":        k.Flags,
+		"protocol":     3,
+		"dnskey":       strings.TrimSpace(k.Public),
+		"max_sig_life": int((8 * 24 * time.Hour).Seconds()),
 	}
 	rr, err := dns.NewRR(k.Public)
 	if err != nil {
@@ -162,11 +162,11 @@ func dnssecInfoJSON(k store.DNSSECKey) map[string]any {
 		return out
 	}
 	out["key_data"] = map[string]any{
-		"flags":           int(dk.Flags),
-		"protocol":        int(dk.Protocol),
-		"algorithm":       int(dk.Algorithm),
-		"algorithm_name":  algName,
-		"public_key":      dk.PublicKey,
+		"flags":          int(dk.Flags),
+		"protocol":       int(dk.Protocol),
+		"algorithm":      int(dk.Algorithm),
+		"algorithm_name": algName,
+		"public_key":     dk.PublicKey,
 	}
 	if ds := dk.ToDS(dns.SHA256); ds != nil {
 		out["ds"] = strings.TrimSpace(ds.String())
@@ -358,13 +358,36 @@ func blackLieNSEC(state request.Request, origin string, mt response.Type) *dns.N
 	nsec := &dns.NSEC{
 		Hdr:        dns.RR_Header{Name: qname, Rrtype: dns.TypeNSEC, Class: dns.ClassINET, Ttl: 300},
 		NextDomain: `\000.` + qname,
-		TypeBitMap: []uint16{dns.TypeA, dns.TypeNS, dns.TypeSOA, dns.TypeMX, dns.TypeTXT, dns.TypeAAAA, dns.TypeRRSIG, dns.TypeNSEC, dns.TypeDNSKEY},
 	}
-	if qname == origin {
-		nsec.TypeBitMap = append(nsec.TypeBitMap, dns.TypeCDS, dns.TypeCDNSKEY)
+	if strings.EqualFold(dns.CanonicalName(qname), origin) {
+		nsec.TypeBitMap = []uint16{
+			dns.TypeA, dns.TypeNS, dns.TypeSOA, dns.TypeMX, dns.TypeTXT,
+			dns.TypeAAAA, dns.TypeRRSIG, dns.TypeNSEC, dns.TypeDNSKEY,
+			dns.TypeCDS, dns.TypeCDNSKEY,
+		}
+	} else {
+		// Non-apex names must not claim SOA/NS/DNSKEY. A static apex bitmap
+		// makes validating resolvers SERVFAIL NODATA (RFC 4035 §5.4): cert-manager
+		// FindZoneByFqdn queries SOA at _acme-challenge.* and gets "invalid denial
+		// of existence" from 8.8.8.8 / 1.1.1.1.
+		nsec.TypeBitMap = []uint16{dns.TypeA, dns.TypeTXT, dns.TypeAAAA, dns.TypeRRSIG, dns.TypeNSEC}
 	}
-	_ = mt
+	if mt == response.NoData || mt == response.NameError {
+		if qt := state.QType(); qt != dns.TypeNSEC {
+			nsec.TypeBitMap = omitRRType(nsec.TypeBitMap, qt)
+		}
+	}
 	return nsec
+}
+
+func omitRRType(bitmap []uint16, t uint16) []uint16 {
+	out := make([]uint16, 0, len(bitmap))
+	for _, x := range bitmap {
+		if x != t {
+			out = append(out, x)
+		}
+	}
+	return out
 }
 
 func (a *Admin) handleGetDNSSEC(w http.ResponseWriter, r *http.Request) {

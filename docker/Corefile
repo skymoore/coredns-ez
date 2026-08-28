@@ -8,6 +8,10 @@
 # Recursion is off. AXFR is localhost-only until you add IPs in the UI
 # (Cluster → Zone transfer). `to *` lets anyone copy the zone.
 #
+# If you add `cache` on the `.` block (same chain as admin), include
+# `disable denial`. Cache runs before admin, so a cached NODATA for
+# `_acme-challenge` is served after the TXT exists (DNS-01).
+#
 # Production DoH/UI: see docker/Corefile.tls and docs/deploy.md.
 # Override this file with -v ./Corefile:/etc/coredns/Corefile
 

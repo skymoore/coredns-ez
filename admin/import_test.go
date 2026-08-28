@@ -122,6 +122,7 @@ https://.:443 {
 	admin
 	cache 86400 {
 		success 9984 86400 10
+		disable denial
 	}
 	forward . 127.0.0.1:5301
 	acl { block net * }
@@ -146,6 +147,7 @@ https://.:443 {
 		"issuer https://auth.example/o/coredns/",
 		"cache 86400 {",
 		"success 9984 86400 10",
+		"disable denial",
 		"forward . 127.0.0.1:5301",
 	} {
 		if !strings.Contains(got, need) {

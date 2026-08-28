@@ -104,6 +104,9 @@ func (s *Store) UpdateUser(u User) error {
 func (s *Store) DeleteUser(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, err := s.db.Exec(`DELETE FROM api_tokens WHERE user_id = ?`, id); err != nil {
+		return err
+	}
 	_, err := s.db.Exec(`DELETE FROM users WHERE id = ?`, id)
 	return err
 }

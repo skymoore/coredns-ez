@@ -23,6 +23,9 @@ func TestUsersAndSnapshot(t *testing.T) {
 	if err != nil || u.Role != RoleAdmin {
 		t.Fatalf("%+v %v", u, err)
 	}
+	if err := s.CreateToken(Token{UserID: u.ID, Name: "cert-manager", TokenHash: "tokhash", Prefix: "cdns_abcd", Role: RoleOperator}); err != nil {
+		t.Fatal(err)
+	}
 	_, err = s.InsertJoinToken("hash", time.Hour)
 	if err != nil {
 		t.Fatal(err)
@@ -47,7 +50,7 @@ func TestUsersAndSnapshot(t *testing.T) {
 		t.Fatalf("gen %d %v", g, err)
 	}
 	snap, err := s.Snapshot()
-	if err != nil || len(snap.Users) != 1 || len(snap.Zones) != 1 || len(snap.Members) != 2 {
+	if err != nil || len(snap.Users) != 1 || len(snap.Zones) != 1 || len(snap.Members) != 2 || len(snap.Tokens) != 1 || snap.Tokens[0].TokenHash != "tokhash" {
 		t.Fatalf("%+v %v", snap, err)
 	}
 	if snap.Members[0].Role != MemberPrimary || snap.Members[1].Role != MemberSecondary {
@@ -66,6 +69,10 @@ func TestUsersAndSnapshot(t *testing.T) {
 	}
 	if _, err := s2.GetUserByName("admin"); err != nil {
 		t.Fatal("replica missing user")
+	}
+	repToks, err := s2.ListTokens("")
+	if err != nil || len(repToks) != 1 || repToks[0].TokenHash != "tokhash" {
+		t.Fatalf("replica tokens %+v %v", repToks, err)
 	}
 	gotHMAC, err := s2.Meta(MetaJWTHMAC)
 	if err != nil || gotHMAC != snap.JWTHMAC {
@@ -127,6 +134,109 @@ func TestUsersAndSnapshot(t *testing.T) {
 	}
 	if wire.Users[0].PasswordHash != "x" {
 		t.Fatalf("cluster JSON dropped password_hash: %s", raw)
+	}
+	if len(wire.Tokens) != 1 || wire.Tokens[0].TokenHash != "tokhash" {
+		t.Fatalf("cluster JSON dropped token_hash: %s", raw)
+	}
+}
+
+func TestAPITokensSurviveReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "api.sqlite")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateUser(User{Username: "admin", PasswordHash: "x", Role: RoleAdmin}); err != nil {
+		t.Fatal(err)
+	}
+	u, err := s.GetUserByName("admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateToken(Token{UserID: u.ID, Name: "cert-manager", TokenHash: "deadbeef", Prefix: "cdns_dead", Role: RoleOperator}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s2.Close() })
+	toks, err := s2.ListTokens("")
+	if err != nil || len(toks) != 1 || toks[0].Name != "cert-manager" || toks[0].TokenHash != "deadbeef" {
+		t.Fatalf("tokens wiped on reopen: %+v %v", toks, err)
+	}
+}
+
+func TestAPITokensSurviveReopenLegacyCascade(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "api.sqlite")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateUser(User{Username: "admin", PasswordHash: "x", Role: RoleAdmin}); err != nil {
+		t.Fatal(err)
+	}
+	u, err := s.GetUserByName("admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateToken(Token{UserID: u.ID, Name: "cert-manager", TokenHash: "cafebabe", Prefix: "cdns_cafe", Role: RoleAdmin}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
+		t.Fatal(err)
+	}
+	stmts := []string{
+		`CREATE TABLE api_tokens_fk (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, prefix TEXT NOT NULL, role TEXT NOT NULL, expires_at INTEGER, created_at INTEGER NOT NULL)`,
+		`INSERT INTO api_tokens_fk SELECT id, user_id, name, token_hash, prefix, role, expires_at, created_at FROM api_tokens`,
+		`DROP TABLE api_tokens`,
+		`ALTER TABLE api_tokens_fk RENAME TO api_tokens`,
+	}
+	for _, q := range stmts {
+		if _, err := s.db.Exec(q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s2.Close() })
+	toks, err := s2.ListTokens("")
+	if err != nil || len(toks) != 1 || toks[0].TokenHash != "cafebabe" {
+		t.Fatalf("legacy CASCADE schema wiped tokens on reopen: %+v %v", toks, err)
+	}
+}
+
+func TestDeleteUserRemovesTokens(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "api.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	if err := s.CreateUser(User{Username: "ops", PasswordHash: "x", Role: RoleOperator}); err != nil {
+		t.Fatal(err)
+	}
+	u, err := s.GetUserByName("ops")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateToken(Token{UserID: u.ID, Name: "ci", TokenHash: "h", Prefix: "cdns_hhhh", Role: RoleOperator}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteUser(u.ID); err != nil {
+		t.Fatal(err)
+	}
+	toks, err := s.ListTokens("")
+	if err != nil || len(toks) != 0 {
+		t.Fatalf("tokens after user delete: %+v %v", toks, err)
 	}
 }
 
@@ -225,8 +335,6 @@ func TestEnsureRecursionSeedsFromACLsOnce(t *testing.T) {
 		t.Fatalf("ensure must not overwrite %+v", got)
 	}
 }
-
-
 
 func rr(line string) (dns.RR, error) {
 	return dns.NewRR(line)
