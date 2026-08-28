@@ -68,6 +68,13 @@ func (a *Admin) parseJWT(raw string) (Actor, error) {
 	return Actor{ID: u.ID, Username: u.Username, Role: c.Role, Kind: c.Kind}, nil
 }
 
+// cookieSecure marks the session cookie Secure on direct TLS connections and
+// when a TLS-terminating proxy reports https via X-Forwarded-Proto, matching
+// the scheme logic in requestBaseURL.
+func cookieSecure(r *http.Request) bool {
+	return r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
+}
+
 func bearer(r *http.Request) string {
 	h := r.Header.Get("Authorization")
 	if strings.HasPrefix(strings.ToLower(h), "bearer ") {
@@ -159,7 +166,7 @@ func (a *Admin) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		Expires:  exp,
 		HttpOnly: true,
-		Secure:   r.TLS != nil,
+		Secure:   cookieSecure(r),
 		SameSite: http.SameSiteLaxMode,
 	})
 	writeJSON(w, http.StatusOK, map[string]any{"token": tok, "expires_at": exp.Unix(), "user": actor})

@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/skymoore/coredns-ez/admin/store"
+	"golang.org/x/time/rate"
 )
 
 func (a *Admin) routes() http.Handler {
@@ -18,12 +19,13 @@ func (a *Admin) routes() http.Handler {
 	if len(a.cfg.CORS) > 0 {
 		r.Use(a.corsMW)
 	}
+	r.Use(newLimiterStore(rate.Limit(100), 200).middleware)
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/", a.handleIndex)
 		r.Get("/health", a.handleHealth)
 		r.Get("/auth/config", a.handleAuthConfig)
-		r.Post("/auth/login", a.handleLogin)
+		r.With(newLimiterStore(rate.Limit(10), 20).middleware).Post("/auth/login", a.handleLogin)
 		r.Get("/auth/oidc/login", a.handleOIDCLogin)
 		r.Get("/auth/oidc/callback", a.handleOIDCCallback)
 		r.Post("/cluster/join", a.handleClusterJoin)

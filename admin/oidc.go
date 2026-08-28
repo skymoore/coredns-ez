@@ -192,7 +192,7 @@ func (a *Admin) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name: sessionCookie, Value: jwtTok, Path: "/", Expires: exp,
-		HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteLaxMode,
+		HttpOnly: true, Secure: cookieSecure(r), SameSite: http.SameSiteLaxMode,
 	})
 	// Authentik (and every other IdP) lands the browser on this URL. JSON
 	// here is a dead end; send humans to the UI. API clients that ask for

@@ -2,8 +2,14 @@ package admin
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 )
+
+// maxJSONBody bounds decoded request bodies. Sized for bulk record/import
+// payloads (tens of thousands of records) without letting a client grow the
+// heap without limit.
+const maxJSONBody = 4 << 20
 
 type errorBody struct {
 	Error string `json:"error"`
@@ -20,7 +26,7 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 }
 
 func readJSON(r *http.Request, dst any) error {
-	dec := json.NewDecoder(r.Body)
+	dec := json.NewDecoder(io.LimitReader(r.Body, maxJSONBody+1))
 	dec.DisallowUnknownFields()
 	return dec.Decode(dst)
 }

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/skymoore/coredns-ez/admin/store"
@@ -580,5 +581,28 @@ func TestClusterConnectRejectedWhenHasSecondary(t *testing.T) {
 func TestInstallHTTPHandlerMissingField(t *testing.T) {
 	if installHTTPHandler(nil, http.NotFoundHandler()) {
 		t.Fatal("nil config must not install")
+	}
+}
+
+func TestLoginCookieSecureHonorsForwardedProto(t *testing.T) {
+	a := testAdmin(t)
+	body, _ := json.Marshal(map[string]string{"username": "admin", "password": "secret"})
+
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(body))
+	r.Header.Set("X-Forwarded-Proto", "https")
+	w := httptest.NewRecorder()
+	a.mux.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("login: %d", w.Code)
+	}
+	if !strings.Contains(w.Header().Get("Set-Cookie"), "Secure") {
+		t.Fatalf("xff https must set Secure: %q", w.Header().Get("Set-Cookie"))
+	}
+
+	r = httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(body))
+	w = httptest.NewRecorder()
+	a.mux.ServeHTTP(w, r)
+	if strings.Contains(w.Header().Get("Set-Cookie"), "Secure") {
+		t.Fatalf("plain http must omit Secure: %q", w.Header().Get("Set-Cookie"))
 	}
 }
