@@ -87,6 +87,9 @@ func (a ACL) Contains(ip net.IP) bool {
 	if ip == nil {
 		return false
 	}
+	if v4 := ip.To4(); v4 != nil {
+		ip = v4
+	}
 	for _, n := range a.Networks {
 		_, cidr, err := net.ParseCIDR(n)
 		if err != nil {

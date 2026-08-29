@@ -68,9 +68,19 @@ func parseMasterBytes(origin string, body []byte) ([]dns.RR, error) {
 	return rrs, nil
 }
 
+func (a *Admin) cacheLabel(ip net.IP) string {
+	if acl, ok := a.matchACL(ip); ok {
+		return acl.Name
+	}
+	return "public"
+}
+
 func (a *Admin) matchACL(ip net.IP) (store.ACL, bool) {
 	if ip == nil {
 		return store.ACL{}, false
+	}
+	if v4 := ip.To4(); v4 != nil {
+		ip = v4
 	}
 	acls, err := a.db.ListACLs()
 	if err != nil {

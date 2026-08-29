@@ -32,13 +32,29 @@ https://.:8443 {
 }
 
 # split-horizon-cache proof: cache in front of admin on its own origin.
-# cache-split.example. is created via the API; short TTLs so the stale-then-
-# fresh check completes inside one test stage. Source-address keying keeps
-# the internal view answer from leaking to public-source clients.
+# cache-split.example. is created via the API; short TTLs so checks complete
+# inside one test stage. ACL-name cache keys keep the internal view answer
+# from leaking to public-source clients.
 cache-split.example. {
+	prometheus :9153
 	cache 10 {
 		disable denial
 		netmask 24
+	}
+	admin
+}
+
+# Live ns1 regression (pg.db.rwx.dev): public `*` catch-all, internal `*`
+# catch-all, more-specific internal exact, prefetch. Prefetch used to call
+# admin as 0.0.0.0 and write the public A into the LAN cache key.
+# prefetch 1 / 90% fires on every cache hit so the poison is exercised, not
+# hoped-for.
+horizon.example. {
+	prometheus :9153
+	cache 30 {
+		success 9984 30 1
+		disable denial
+		prefetch 1 1m 90%
 	}
 	admin
 }

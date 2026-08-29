@@ -3,12 +3,14 @@ package cache
 import (
 	"context"
 	"math"
+	"net"
 	"time"
 
 	"github.com/coredns/coredns/plugin"
 	"github.com/coredns/coredns/plugin/metadata"
 	"github.com/coredns/coredns/plugin/metrics"
 	"github.com/coredns/coredns/request"
+	"github.com/skymoore/coredns-ez/internal/cachegen"
 
 	"github.com/miekg/dns"
 )
@@ -29,10 +31,15 @@ func (c *Cache) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) 
 	now := c.now()
 	server := metrics.WithServer(ctx)
 
-	// Split-horizon keying: fold the client's source network into every cache
-	// key for this exchange so a per-scope answer never replays to a client
-	// from another scope.
-	src := c.bucketOf(state.IP())
+	// Split-horizon keying. Prefer the ACL name admin registered so a LAN
+	// client can never share an entry with a public one. Fall back to the
+	// source netmask in tests (no matcher). An unparseable address must not
+	// collapse into a shared empty bucket — that is how a public wildcard
+	// leaks onto the LAN.
+	src := c.keySrc(state.IP())
+	if len(src) == 0 {
+		return plugin.NextOrFailure(c.Name(), c.Next, ctx, w, rc)
+	}
 
 	// On cache refresh, we will just use the DO bit from the incoming query for the refresh since we key our cache
 	// with the query DO bit. That means two separate cache items for the query DO bit true or false. In the situation
@@ -80,11 +87,11 @@ func (c *Cache) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) 
 		// Adjust the time to get a 0 TTL in the reply built from a stale item.
 		now = now.Add(time.Duration(ttl) * time.Second)
 		if !c.verifyStale {
-			c.tryPrefetch(ctx, i, server, rc, do, cd, now, true, src)
+			c.tryPrefetch(ctx, i, server, rc, do, cd, now, true, src, state.IP())
 		}
 		servedStale.WithLabelValues(server, c.zonesMetricLabel, c.viewMetricLabel).Inc()
 	} else if c.shouldPrefetch(i, now) {
-		c.tryPrefetch(ctx, i, server, rc, do, cd, now, false, src)
+		c.tryPrefetch(ctx, i, server, rc, do, cd, now, false, src, state.IP())
 	}
 
 	if i.wildcard != "" {
@@ -123,7 +130,10 @@ func wildcardFunc(ctx context.Context) func() string {
 // tryPrefetch dispatches a background prefetch for i if one is not already in
 // flight. The CAS on i.refreshing ensures at most one prefetch goroutine per
 // item, so prefetch load scales with distinct stale keys rather than QPS.
-func (c *Cache) tryPrefetch(ctx context.Context, i *item, server string, req *dns.Msg, do, cd bool, now time.Time, stale bool, src []byte) {
+func (c *Cache) tryPrefetch(ctx context.Context, i *item, server string, req *dns.Msg, do, cd bool, now time.Time, stale bool, src []byte, remote string) {
+	if net.ParseIP(remote) == nil {
+		return
+	}
 	failureRecheck := time.Duration(0)
 	if stale {
 		failureRecheck = c.staleRecheck
@@ -132,7 +142,7 @@ func (c *Cache) tryPrefetch(ctx context.Context, i *item, server string, req *dn
 	if !i.beginRefresh(nowFunc(), failureRecheck) {
 		return
 	}
-	cw := newPrefetchResponseWriter(server, req, do, cd, c, src)
+	cw := newPrefetchResponseWriter(server, req, do, cd, c, src, remote)
 	go func() {
 		refreshed := c.doPrefetch(ctx, cw, i, now, stale)
 		i.endRefresh(nowFunc(), failureRecheck, refreshed)
@@ -235,6 +245,16 @@ func authenticatedRefreshState(state request.Request) request.Request {
 
 // Name implements the Handler interface.
 func (c *Cache) Name() string { return "cache" }
+
+// keySrc is the per-client cache-key material. When admin has registered an
+// ACL matcher the key is the ACL name ("internal" vs "public"), which is the
+// actual split-horizon scope. Otherwise the source netmask is used.
+func (c *Cache) keySrc(remote string) []byte {
+	if label := cachegen.Label(remote); label != "" {
+		return []byte(label)
+	}
+	return c.bucketOf(remote)
+}
 
 // getIfNotStale returns an item if it exists in the cache and has not expired.
 func (c *Cache) getIfNotStale(now time.Time, state request.Request, server string, src []byte) *item {

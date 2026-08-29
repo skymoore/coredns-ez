@@ -18,6 +18,7 @@ import (
 	"github.com/miekg/dns"
 	"github.com/skymoore/coredns-ez/admin/store"
 	dnsupdatepersist "github.com/skymoore/coredns-ez/dns-update-persistent"
+	"github.com/skymoore/coredns-ez/internal/cachegen"
 )
 
 func init() {
@@ -62,6 +63,7 @@ func setup(c *caddy.Controller) error {
 
 	registerTransferStartup(c, a)
 	c.OnStartup(func() error {
+		cachegen.SetMatcher(a.cacheLabel)
 		if err := a.importCorefileZones(); err != nil {
 			log.Warningf("zonefile import: %v", err)
 		}
@@ -69,6 +71,7 @@ func setup(c *caddy.Controller) error {
 		return a.loadPersistedZones()
 	})
 	c.OnShutdown(func() error {
+		cachegen.SetMatcher(nil)
 		instanceMu.Lock()
 		if instance == a {
 			instance = nil

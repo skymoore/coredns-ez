@@ -373,18 +373,27 @@ type ResponseWriter struct {
 	nexcept []string // negative zone exceptions
 }
 
-// prefetchAddr is the synthetic remote address for prefetch requests. There is
-// no client connection, and per request.Proto the address type is what selects
-// the response-size budget; TCP ensures upstream replies aren't truncated.
+// prefetchAddr is used only when the original client address cannot be parsed.
+// TCP (not UDP) so the size budget is not truncated. An unspecified IP here
+// makes admin treat the refresh as a public client; callers must not write
+// that answer into an internal cache key.
 var prefetchAddr = &net.TCPAddr{}
 
 // newPrefetchResponseWriter returns a ResponseWriter for prefetch requests.
 // Prefetch has no client connection: the inner ResponseWriter is nil, WriteMsg
 // short-circuits after caching when w.prefetch is true, and the nil-safe
 // overrides below make the remaining dns.ResponseWriter methods well-defined.
-func newPrefetchResponseWriter(server string, req *dns.Msg, do, cd bool, c *Cache, src []byte) *ResponseWriter {
+//
+// remoteAddr is a TCP address carrying the original client's IP so split-horizon
+// backends (admin ACL views) see the same client the cache key was built for.
+// Using 0.0.0.0 here used to poison the LAN bucket with the public answer.
+func newPrefetchResponseWriter(server string, req *dns.Msg, do, cd bool, c *Cache, src []byte, remote string) *ResponseWriter {
 	req = req.Copy()
 	req.AuthenticatedData = true
+	addr := prefetchAddr
+	if ip := net.ParseIP(remote); ip != nil {
+		addr = &net.TCPAddr{IP: ip}
+	}
 	cw := &ResponseWriter{
 		Cache:      c,
 		server:     server,
@@ -392,10 +401,10 @@ func newPrefetchResponseWriter(server string, req *dns.Msg, do, cd bool, c *Cach
 		cd:         cd,
 		ad:         true,
 		prefetch:   true,
-		remoteAddr: prefetchAddr,
+		remoteAddr: addr,
 		src:        src,
 	}
-	cw.state = request.Request{Req: req}
+	cw.state = request.Request{Req: req, W: cw}
 	return cw
 }
 

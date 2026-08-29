@@ -32,6 +32,22 @@ CSPLIT_OWNER="${CSPLIT_OWNER:-csplit.cache-split.example.}"
 CSPLIT_PUBLIC="${CSPLIT_PUBLIC:-192.0.2.70}"
 CSPLIT_INTERNAL="${CSPLIT_INTERNAL:-10.8.0.70}"
 CSPLIT_UPDATED="${CSPLIT_UPDATED:-192.0.2.71}"
+# Live ns1 regression (pg.db.rwx.dev): public catch-all wildcard, internal
+# catch-all, more-specific internal exact, cache+prefetch in front of admin.
+HORIZON_ORIGIN="${HORIZON_ORIGIN:-horizon.example.}"
+HORIZON_PG="${HORIZON_PG:-pg.db.horizon.example.}"
+HORIZON_LATE="${HORIZON_LATE:-late.horizon.example.}"
+HORIZON_NS1="${HORIZON_NS1:-ns1.horizon.example.}"
+HORIZON_MAIL="${HORIZON_MAIL:-mail.horizon.example.}"
+HORIZON_NONE="${HORIZON_NONE:-nosuch.horizon.example.}"
+HORIZON_PUB="${HORIZON_PUB:-192.0.2.89}"
+HORIZON_INT_WILD="${HORIZON_INT_WILD:-10.8.0.99}"
+HORIZON_PG_INT="${HORIZON_PG_INT:-10.8.0.90}"
+HORIZON_NS1_PUB="${HORIZON_NS1_PUB:-192.0.2.53}"
+HORIZON_NS1_INT="${HORIZON_NS1_INT:-10.8.0.53}"
+HORIZON_MAIL_PUB="${HORIZON_MAIL_PUB:-192.0.2.25}"
+LAN_SRC="${LAN_SRC:-10.53.0.30}"
+PUB_SRC="${PUB_SRC:-172.30.53.30}"
 METRICS_PRIMARY="${METRICS_PRIMARY:-http://172.30.53.10:9153/metrics}"
 METRICS_SECONDARY="${METRICS_SECONDARY:-http://172.30.53.20:9153/metrics}"
 
@@ -216,8 +232,10 @@ assert_rr() {
 	return 1
 }
 
-# Query with an explicit source address (dig -b) so split-horizon ACLs can be
-# exercised from the same tester container.
+# Query with an explicit source address (dig -b). LAN checks must target
+# INTERNAL_DNS (10.53.0.10): binding 10.53.0.30 and sending to 172.30.53.10
+# does not preserve the source address across docker networks, so CoreDNS
+# would see 172.30.53.30 and serve the public view.
 assert_rr_from() {
 	local src="$1" at="$2" name="$3" type="$4" expect="$5" label="$6"
 	local got
@@ -263,6 +281,58 @@ wait_rr_from() {
 # Sum of coredns cache hit counters (all servers/zones/views).
 cache_hits_total() {
 	curl -sS "$METRICS_PRIMARY" 2>/dev/null | awk '/^coredns_cache_hits_total/ {s += $NF} END {print s+0}'
+}
+
+rr_from() {
+	local src="$1" at="$2" name="$3" type="$4"
+	dig "${DIG_OPTS[@]}" -b "$src" @"$at" +short "$name" "$type" 2>/dev/null || true
+}
+
+# n queries from src; every answer must be `expect` and must never be `forbidden`.
+assert_stable_rr_from() {
+	local src="$1" at="$2" name="$3" type="$4" expect="$5" forbidden="$6" n="$7" label="$8"
+	local i got
+	for i in $(seq 1 "$n"); do
+		got=$(rr_from "$src" "$at" "$name" "$type")
+		if printf '%s\n' "$got" | grep -Fqx "$forbidden"; then
+			fail "$label" "query $i/$n src=$src served forbidden '$forbidden' in: ${got:-<empty>}"
+			return 1
+		fi
+		if ! printf '%s\n' "$got" | grep -Fqx "$expect"; then
+			fail "$label" "query $i/$n src=$src expected '$expect', got: ${got:-<empty>}"
+			return 1
+		fi
+	done
+	pass "$label ($n queries)"
+}
+
+assert_never_rr_from() {
+	local src="$1" at="$2" name="$3" type="$4" forbidden="$5" n="$6" label="$7"
+	local i got
+	for i in $(seq 1 "$n"); do
+		got=$(rr_from "$src" "$at" "$name" "$type")
+		if printf '%s\n' "$got" | grep -Fqx "$forbidden"; then
+			fail "$label" "query $i/$n src=$src served forbidden '$forbidden' in: ${got:-<empty>}"
+			return 1
+		fi
+	done
+	pass "$label ($n queries)"
+}
+
+wait_origin_soa() {
+	local at="$1" origin="$2" timeout="${3:-20}"
+	local start now
+	start=$(date +%s)
+	while true; do
+		if [[ -n "$(rr_values "$at" "$origin" SOA || true)" ]]; then
+			return 0
+		fi
+		now=$(date +%s)
+		if (( now - start >= timeout )); then
+			return 1
+		fi
+		sleep 0.5
+	done
 }
 
 # Substring match on dig +short (presentation of LOC/HTTPS/SVCB/NAPTR is not stable).

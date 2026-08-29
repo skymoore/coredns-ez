@@ -548,6 +548,7 @@ stage_admin() {
 	stage_cluster_dns "$token" "$stoken"
 	stage_split_horizon "$token"
 	stage_split_horizon_cache "$token"
+	stage_horizon_acl_cache "$token"
 }
 
 stage_dnssec_enable() {
@@ -944,17 +945,17 @@ stage_split_horizon_cache() {
 		return
 	fi
 
-	# Prime the public bucket first. The internal-source client must still get
-	# its own view answer: with a name-only cache key the cached public answer
-	# would replay here.
-	assert_rr_from "172.30.53.30" "$PRIMARY" "$CSPLIT_OWNER" A "$CSPLIT_PUBLIC" "cache: public source gets public A"
-	assert_rr_from "10.53.0.30" "$PRIMARY" "$CSPLIT_OWNER" A "$CSPLIT_INTERNAL" "cache: internal source gets view A (per-source key)"
-	assert_rr_from "172.30.53.30" "$PRIMARY" "$CSPLIT_OWNER" A "$CSPLIT_PUBLIC" "cache: public source still gets public A"
+	# Prime the public bucket first (query the dnsnet address). LAN checks
+	# query 10.53.0.10 so CoreDNS sees 10.53.0.30 and the internal ACL.
+	assert_rr_from "$PUB_SRC" "$PRIMARY" "$CSPLIT_OWNER" A "$CSPLIT_PUBLIC" "cache: public source gets public A"
+	assert_rr_from "$LAN_SRC" "$INTERNAL_DNS" "$CSPLIT_OWNER" A "$CSPLIT_INTERNAL" "cache: internal source gets view A (per-source key)"
+	assert_rr_from "$PUB_SRC" "$PRIMARY" "$CSPLIT_OWNER" A "$CSPLIT_PUBLIC" "cache: public source still gets public A"
+	assert_never_rr_from "$LAN_SRC" "$INTERNAL_DNS" "$CSPLIT_OWNER" A "$CSPLIT_PUBLIC" 10 "cache: LAN never served public A"
 
 	# Repeat inside one bucket must hit the cache, not the upstream.
 	local hits0 hits1
 	hits0=$(cache_hits_total)
-	assert_rr_from "10.53.0.30" "$PRIMARY" "$CSPLIT_OWNER" A "$CSPLIT_INTERNAL" "cache: internal source repeat stable"
+	assert_rr_from "$LAN_SRC" "$INTERNAL_DNS" "$CSPLIT_OWNER" A "$CSPLIT_INTERNAL" "cache: internal source repeat stable"
 	hits1=$(cache_hits_total)
 	if (( hits1 > hits0 )); then
 		pass "cache: same-bucket repeat served from cache"
@@ -962,9 +963,10 @@ stage_split_horizon_cache() {
 		fail "cache: same-bucket repeat served from cache" "hits $hits0 -> $hits1"
 	fi
 
-	# Within the cache TTL the old answer is replayed; after it expires the
-	# refreshed value appears. Proves caching is active and bounded.
-	if ! wait_rr_from "172.30.53.30" "$PRIMARY" "$CSPLIT_OWNER" A "$CSPLIT_PUBLIC" 20; then
+	# Mutation bumps the cache epoch. The public client must see the new
+	# RDATA immediately — not the previous A until TTL expiry. The LAN
+	# client must keep the internal view A, never either public value.
+	if ! wait_rr_from "$PUB_SRC" "$PRIMARY" "$CSPLIT_OWNER" A "$CSPLIT_PUBLIC" 20; then
 		fail "cache: re-prime public bucket"
 		return
 	fi
@@ -976,12 +978,115 @@ stage_split_horizon_cache() {
 		fail "PUT replace $CSPLIT_OWNER" "code=$code body=$(api_body "$resp")"
 		return
 	fi
-	assert_rr_from "172.30.53.30" "$PRIMARY" "$CSPLIT_OWNER" A "$CSPLIT_PUBLIC" "cache: stale public A served within TTL"
-	if wait_rr_from "172.30.53.30" "$PRIMARY" "$CSPLIT_OWNER" A "$CSPLIT_UPDATED" 20; then
-		pass "cache: refreshed public A after TTL expiry"
+	if wait_rr_from "$PUB_SRC" "$PRIMARY" "$CSPLIT_OWNER" A "$CSPLIT_UPDATED" 8; then
+		pass "cache: mutation invalidates cached public A"
 	else
-		fail "cache: refreshed public A after TTL expiry"
+		fail "cache: mutation invalidates cached public A"
 	fi
+	assert_rr_from "$LAN_SRC" "$INTERNAL_DNS" "$CSPLIT_OWNER" A "$CSPLIT_INTERNAL" "cache: internal view A survives public replace"
+	assert_never_rr_from "$LAN_SRC" "$INTERNAL_DNS" "$CSPLIT_OWNER" A "$CSPLIT_PUBLIC" 5 "cache: LAN never served old public A after replace"
+	assert_never_rr_from "$LAN_SRC" "$INTERNAL_DNS" "$CSPLIT_OWNER" A "$CSPLIT_UPDATED" 5 "cache: LAN never served new public A"
+}
+
+horizon_post() {
+	local token="$1" body="$2" label="$3"
+	local resp code
+	resp=$(curl -sS -w '\n%{http_code}' -X POST "$API_PRIMARY/api/v1/zones/${HORIZON_ORIGIN}/records" \
+		-H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+		-d "$body")
+	code=$(api_code "$resp")
+	if [[ "$code" == "201" ]]; then
+		pass "$label"
+		return 0
+	fi
+	fail "$label" "code=$code body=$(api_body "$resp")"
+	return 1
+}
+
+# Live ns1 regression. A LAN client must never be served the public A for a
+# name that has an internal ACL record — not on a miss, not on a cache hit,
+# not after prefetch. Public catch-all wildcards must not beat a more-specific
+# internal exact.
+stage_horizon_acl_cache() {
+	local token="$1"
+	echo "-- horizon ACL + cache + prefetch (pg.db.rwx.dev regression)"
+
+	local resp code
+	resp=$(curl -sS -w '\n%{http_code}' -X POST "$API_PRIMARY/api/v1/zones" \
+		-H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+		-d "{\"origin\":\"$HORIZON_ORIGIN\",\"type\":\"primary\"}")
+	code=$(api_code "$resp")
+	if [[ "$code" == "200" || "$code" == "201" || "$code" == "409" ]]; then
+		pass "POST /api/v1/zones $HORIZON_ORIGIN"
+	else
+		fail "POST /api/v1/zones $HORIZON_ORIGIN" "code=$code body=$(api_body "$resp")"
+		return
+	fi
+	if wait_origin_soa "$PRIMARY" "$HORIZON_ORIGIN" 20; then
+		pass "horizon origin answers SOA"
+	else
+		fail "horizon origin answers SOA"
+		return
+	fi
+
+	horizon_post "$token" "{\"name\":\"*\",\"type\":\"A\",\"ttl\":5,\"rdata\":\"$HORIZON_PUB\"}" "POST public wildcard $HORIZON_ORIGIN" || return 1
+	horizon_post "$token" "{\"name\":\"*\",\"type\":\"A\",\"ttl\":5,\"rdata\":\"$HORIZON_INT_WILD\",\"acl\":\"internal\"}" "POST internal wildcard $HORIZON_ORIGIN" || return 1
+	horizon_post "$token" "{\"name\":\"ns1\",\"type\":\"A\",\"ttl\":5,\"rdata\":\"$HORIZON_NS1_PUB\"}" "POST public A $HORIZON_NS1" || return 1
+	horizon_post "$token" "{\"name\":\"ns1\",\"type\":\"A\",\"ttl\":5,\"rdata\":\"$HORIZON_NS1_INT\",\"acl\":\"internal\"}" "POST internal A $HORIZON_NS1" || return 1
+	horizon_post "$token" "{\"name\":\"mail\",\"type\":\"A\",\"ttl\":5,\"rdata\":\"$HORIZON_MAIL_PUB\"}" "POST public-only exact $HORIZON_MAIL" || return 1
+
+	# Prime the public cache with the catch-all before the internal exact exists.
+	assert_rr_from "$PUB_SRC" "$PRIMARY" "$HORIZON_PG" A "$HORIZON_PUB" "horizon: public source synthesizes public wildcard for pg.db"
+	assert_never_rr_from "$LAN_SRC" "$INTERNAL_DNS" "$HORIZON_PG" A "$HORIZON_PUB" 5 "horizon: LAN never gets public wildcard before exact exists"
+	assert_rr_from "$LAN_SRC" "$INTERNAL_DNS" "$HORIZON_PG" A "$HORIZON_INT_WILD" "horizon: LAN gets internal wildcard before exact exists"
+
+	horizon_post "$token" "{\"name\":\"pg.db\",\"type\":\"A\",\"ttl\":5,\"rdata\":\"$HORIZON_PG_INT\",\"acl\":\"internal\"}" "POST internal exact $HORIZON_PG" || return 1
+
+	# Epoch bump + most-specific: LAN must see the new exact immediately, not
+	# a cached public (or internal) wildcard.
+	if wait_rr_from "$LAN_SRC" "$INTERNAL_DNS" "$HORIZON_PG" A "$HORIZON_PG_INT" 8; then
+		pass "horizon: LAN sees internal exact immediately after add"
+	else
+		fail "horizon: LAN sees internal exact immediately after add"
+		return
+	fi
+	assert_rr_from "$PUB_SRC" "$PRIMARY" "$HORIZON_PG" A "$HORIZON_PUB" "horizon: public source still gets public wildcard for pg.db"
+	assert_never_rr_from "$LAN_SRC" "$INTERNAL_DNS" "$HORIZON_PG" A "$HORIZON_PUB" 8 "horizon: LAN never served public A for internal exact"
+
+	stage_horizon_acl_query ""
+
+	# Prefetch 1/90% fires on every cache hit. 20 interleaved queries would
+	# have flipped the LAN bucket to the public A when prefetch used 0.0.0.0.
+	assert_stable_rr_from "$LAN_SRC" "$INTERNAL_DNS" "$HORIZON_PG" A "$HORIZON_PG_INT" "$HORIZON_PUB" 20 "horizon: LAN pg.db stable across prefetch"
+	assert_stable_rr_from "$PUB_SRC" "$PRIMARY" "$HORIZON_PG" A "$HORIZON_PUB" "$HORIZON_PG_INT" 20 "horizon: public pg.db stable across prefetch"
+	sleep 0.5
+	assert_rr_from "$LAN_SRC" "$INTERNAL_DNS" "$HORIZON_PG" A "$HORIZON_PG_INT" "horizon: LAN pg.db still internal after prefetch window"
+	assert_rr_from "$PUB_SRC" "$PRIMARY" "$HORIZON_PG" A "$HORIZON_PUB" "horizon: public pg.db still public after prefetch window"
+
+	# Add a more-specific internal exact after both wildcards have been cached.
+	assert_rr_from "$PUB_SRC" "$PRIMARY" "$HORIZON_LATE" A "$HORIZON_PUB" "horizon: public late → public wildcard"
+	assert_rr_from "$LAN_SRC" "$INTERNAL_DNS" "$HORIZON_LATE" A "$HORIZON_INT_WILD" "horizon: LAN late → internal wildcard"
+	horizon_post "$token" "{\"name\":\"late\",\"type\":\"A\",\"ttl\":5,\"rdata\":\"$HORIZON_PG_INT\",\"acl\":\"internal\"}" "POST internal exact $HORIZON_LATE" || return 1
+	if wait_rr_from "$LAN_SRC" "$INTERNAL_DNS" "$HORIZON_LATE" A "$HORIZON_PG_INT" 8; then
+		pass "horizon: mutation invalidates LAN wildcard cache"
+	else
+		fail "horizon: mutation invalidates LAN wildcard cache"
+	fi
+	assert_never_rr_from "$LAN_SRC" "$INTERNAL_DNS" "$HORIZON_LATE" A "$HORIZON_PUB" 8 "horizon: LAN late never public after exact add"
+	assert_rr_from "$PUB_SRC" "$PRIMARY" "$HORIZON_LATE" A "$HORIZON_PUB" "horizon: public late still public wildcard"
+}
+
+stage_horizon_acl_query() {
+	local tag="${1:+$1 }"
+	assert_rr_from "$LAN_SRC" "$INTERNAL_DNS" "$HORIZON_PG" A "$HORIZON_PG_INT" "${tag}LAN pg.db → internal exact"
+	assert_never_rr_from "$LAN_SRC" "$INTERNAL_DNS" "$HORIZON_PG" A "$HORIZON_PUB" 5 "${tag}LAN pg.db never public"
+	assert_rr_from "$PUB_SRC" "$PRIMARY" "$HORIZON_PG" A "$HORIZON_PUB" "${tag}public pg.db → public wildcard"
+	assert_rr_from "$LAN_SRC" "$INTERNAL_DNS" "$HORIZON_NONE" A "$HORIZON_INT_WILD" "${tag}LAN nosuch → internal wildcard"
+	assert_rr_from "$PUB_SRC" "$PRIMARY" "$HORIZON_NONE" A "$HORIZON_PUB" "${tag}public nosuch → public wildcard"
+	assert_rr_from "$LAN_SRC" "$INTERNAL_DNS" "$HORIZON_NS1" A "$HORIZON_NS1_INT" "${tag}LAN ns1 → internal exact"
+	assert_rr_from "$PUB_SRC" "$PRIMARY" "$HORIZON_NS1" A "$HORIZON_NS1_PUB" "${tag}public ns1 → public exact"
+	assert_rr_from "$LAN_SRC" "$INTERNAL_DNS" "$HORIZON_MAIL" A "$HORIZON_MAIL_PUB" "${tag}LAN mail public exact beats internal wildcard"
+	assert_rr_from "$PUB_SRC" "$PRIMARY" "$HORIZON_MAIL" A "$HORIZON_MAIL_PUB" "${tag}public mail → public exact"
 }
 
 stage_primary_restart() {
@@ -1029,6 +1134,7 @@ stage_primary_restart() {
 		fi
 	fi
 	stage_split_horizon_query "after restart"
+	stage_horizon_acl_query "after restart"
 
 	if wait_rr "$SECONDARY" "persist-probe.$ZONE" TXT '"still-here"' 30; then
 		pass "secondary still serves persist-probe"

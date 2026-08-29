@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/coredns/caddy"
 	"github.com/coredns/coredns/plugin"
@@ -146,6 +147,96 @@ func TestBucketOf(t *testing.T) {
 	}
 	if eq(c.bucketOf("192.168.8.53"), c.bucketOf("2001:db8::1")) {
 		t.Fatal("v4 and v6 buckets must not collide")
+	}
+}
+
+func TestPrefetchDoesNotPoisonSplitHorizon(t *testing.T) {
+	t0, err := time.Parse(time.RFC3339, "2018-01-01T14:00:00+00:00")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := New()
+	c.minpttl = 0
+	c.prefetch = 1
+	c.percentage = 10
+	c.now = func() time.Time { return t0 }
+	c.Next = plugin.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
+		host, _, _ := net.SplitHostPort(w.RemoteAddr().String())
+		ip := net.ParseIP(host)
+		m := new(dns.Msg)
+		m.SetReply(r)
+		m.Authoritative = true
+		if ip4 := ip.To4(); ip4 != nil && ip4[0] == 10 {
+			m.Answer = []dns.RR{test.A("split.example. 80 IN A 10.1.2.3")}
+		} else {
+			m.Answer = []dns.RR{test.A("split.example. 80 IN A 192.0.2.10")}
+		}
+		return dns.RcodeSuccess, w.WriteMsg(m)
+	})
+
+	if got := answerOf(t, serveFrom(t, c, "10.9.8.7", "split.example.")); got != "10.1.2.3" {
+		t.Fatalf("prime: got %q", got)
+	}
+	c.now = func() time.Time { return t0.Add(73 * time.Second) }
+	if got := answerOf(t, serveFrom(t, c, "10.9.8.7", "split.example.")); got != "10.1.2.3" {
+		t.Fatalf("hit triggering prefetch: got %q", got)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		c.now = func() time.Time { return t0.Add(80 * time.Second) }
+		got := answerOf(t, serveFrom(t, c, "10.9.8.7", "split.example."))
+		if got == "10.1.2.3" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("after prefetch LAN got %q; public answer poisoned the internal bucket", got)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestCacheKeyedByACLNameNotNetmask(t *testing.T) {
+	cachegen.SetMatcher(func(ip net.IP) string {
+		if v4 := ip.To4(); v4 != nil && v4[0] == 10 {
+			return "internal"
+		}
+		return "public"
+	})
+	t.Cleanup(func() { cachegen.SetMatcher(nil) })
+
+	calls := 0
+	c := New()
+	c.minpttl = 0
+	c.Next = plugin.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
+		calls++
+		host, _, _ := net.SplitHostPort(w.RemoteAddr().String())
+		ip := net.ParseIP(host)
+		m := new(dns.Msg)
+		m.SetReply(r)
+		m.Authoritative = true
+		if ip4 := ip.To4(); ip4 != nil && ip4[0] == 10 {
+			m.Answer = []dns.RR{test.A("split.example. 300 IN A 10.1.2.3")}
+		} else {
+			m.Answer = []dns.RR{test.A("split.example. 300 IN A 192.0.2.10")}
+		}
+		return dns.RcodeSuccess, w.WriteMsg(m)
+	})
+
+	if got := answerOf(t, serveFrom(t, c, "10.1.1.1", "split.example.")); got != "10.1.2.3" {
+		t.Fatalf("internal: got %q", got)
+	}
+	before := calls
+	if got := answerOf(t, serveFrom(t, c, "10.9.8.7", "split.example.")); got != "10.1.2.3" {
+		t.Fatalf("other /24 in same ACL must share the cache: got %q", got)
+	}
+	if calls != before {
+		t.Fatalf("ACL-keyed cache should hit across /24s, calls %d -> %d", before, calls)
+	}
+	if got := answerOf(t, serveFrom(t, c, "8.8.8.8", "split.example.")); got != "192.0.2.10" {
+		t.Fatalf("public client got %q", got)
+	}
+	if calls != before+1 {
+		t.Fatalf("public client must miss the internal ACL key, calls %d", calls)
 	}
 }
 
