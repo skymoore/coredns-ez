@@ -215,20 +215,27 @@ func (a *Admin) matchViews(qname string) string {
 	return best
 }
 
-func (a *Admin) pickView(origin string, r *dns.Msg, ip net.IP) *dnsupdatepersist.UpdatePersist {
-	if ip == nil || r == nil || len(r.Question) == 0 {
+func (a *Admin) matchingView(origin string, ip net.IP) *dnsupdatepersist.UpdatePersist {
+	if ip == nil {
 		return nil
 	}
 	acl, ok := a.matchACL(ip)
 	if !ok {
 		return nil
 	}
-	v := a.viewOf(origin, acl.Name)
+	return a.viewOf(origin, acl.Name)
+}
+
+func (a *Admin) pickView(origin string, r *dns.Msg, ip net.IP) *dnsupdatepersist.UpdatePersist {
+	if r == nil || len(r.Question) == 0 {
+		return nil
+	}
+	v := a.matchingView(origin, ip)
 	if v == nil {
 		return nil
 	}
 	q := r.Question[0]
-	if v.HasRRset(q.Name, q.Qtype) || (q.Qtype != dns.TypeCNAME && v.HasRRset(q.Name, dns.TypeCNAME)) {
+	if v.Answers(q.Name, q.Qtype) || v.HasCoveringWildcard(q.Name, q.Qtype) {
 		return v
 	}
 	return nil
@@ -245,6 +252,10 @@ func zoneTransfer(r *dns.Msg) bool {
 	return false
 }
 
+// pickServe chooses the zone that should answer this query. Most-specific
+// owner wins across the public zone and the matching ACL view; the view wins
+// ties. That is: view exact, then public exact, then view wildcard, then the
+// public zone (which may still synthesize a public wildcard).
 func (a *Admin) pickServe(origin string, r *dns.Msg, ip net.IP) *dnsupdatepersist.UpdatePersist {
 	a.mu.RLock()
 	pub := a.primaries[origin]
@@ -252,10 +263,19 @@ func (a *Admin) pickServe(origin string, r *dns.Msg, ip net.IP) *dnsupdatepersis
 	if pub == nil {
 		return nil
 	}
-	if !zoneTransfer(r) {
-		if v := a.pickView(origin, r, ip); v != nil {
-			return v
-		}
+	if zoneTransfer(r) || r == nil || len(r.Question) == 0 {
+		return pub
+	}
+	q := r.Question[0]
+	v := a.matchingView(origin, ip)
+	if v != nil && v.Answers(q.Name, q.Qtype) {
+		return v
+	}
+	if pub.Answers(q.Name, q.Qtype) {
+		return pub
+	}
+	if v != nil && v.HasCoveringWildcard(q.Name, q.Qtype) {
+		return v
 	}
 	return pub
 }

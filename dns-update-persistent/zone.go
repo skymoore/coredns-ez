@@ -48,6 +48,41 @@ func (d *UpdatePersist) HasRRset(name string, rrtype uint16) bool {
 	return d.rrsetExists(name, rrtype)
 }
 
+// Answers reports whether this zone has an exact RRset for name/type, or a
+// CNAME at name that a non-CNAME query would follow.
+func (d *UpdatePersist) Answers(name string, qtype uint16) bool {
+	if d.HasRRset(name, qtype) {
+		return true
+	}
+	return qtype != dns.TypeCNAME && d.HasRRset(name, dns.TypeCNAME)
+}
+
+// HasCoveringWildcard reports whether a wildcard at some parent of name would
+// synthesize an answer of qtype (or a CNAME). Used so an internal `*.example.`
+// overlays the public wildcard for ACL clients, without hiding a more-specific
+// public exact at name.
+func (d *UpdatePersist) HasCoveringWildcard(name string, qtype uint16) bool {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	c := strings.ToLower(dns.CanonicalName(name))
+	origin := d.Zone
+	if c == origin || !dns.IsSubDomain(origin, c) {
+		return false
+	}
+	for c != origin {
+		i := strings.IndexByte(c, '.')
+		if i < 0 {
+			return false
+		}
+		c = c[i+1:]
+		wild := "*." + c
+		if d.rrsetExists(wild, qtype) || (qtype != dns.TypeCNAME && d.rrsetExists(wild, dns.TypeCNAME)) {
+			return true
+		}
+	}
+	return false
+}
+
 func (d *UpdatePersist) rrsetOf(name string, rrtype uint16) []dns.RR {
 	c := strings.ToLower(dns.CanonicalName(name))
 	var out []dns.RR

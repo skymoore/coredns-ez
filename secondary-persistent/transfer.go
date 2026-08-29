@@ -7,6 +7,7 @@ import (
 	"github.com/coredns/coredns/plugin/file"
 	"github.com/coredns/coredns/plugin/pkg/catalog"
 	"github.com/coredns/coredns/plugin/transfer"
+	"github.com/skymoore/coredns-ez/internal/cachegen"
 
 	"github.com/miekg/dns"
 )
@@ -106,6 +107,7 @@ func (s *SecondaryPersist) transferIn(origin string, z *file.Zone, t *transfer.T
 	}
 	log.Infof("Transferred: %s via %s with %d SOA serial", origin, via, serial)
 	s.persistAsync(origin, z)
+	cachegen.Bump()
 	return nil
 }
 

@@ -43,6 +43,7 @@ import (
 	"github.com/coredns/coredns/plugin/file"
 	clog "github.com/coredns/coredns/plugin/pkg/log"
 	"github.com/coredns/coredns/plugin/transfer"
+	"github.com/skymoore/coredns-ez/internal/cachegen"
 	"github.com/skymoore/coredns-ez/ixfr"
 
 	"github.com/miekg/dns"
@@ -153,5 +154,6 @@ func (d *UpdatePersist) swap(rrs []dns.RR) error {
 		return err
 	}
 	d.rrs, d.view = rrs, view
+	cachegen.Bump()
 	return nil
 }

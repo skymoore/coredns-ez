@@ -9,6 +9,7 @@ import (
 	"github.com/coredns/coredns/plugin"
 	"github.com/coredns/coredns/plugin/pkg/dnstest"
 	"github.com/coredns/coredns/plugin/test"
+	"github.com/skymoore/coredns-ez/internal/cachegen"
 
 	"github.com/miekg/dns"
 )
@@ -145,5 +146,38 @@ func TestBucketOf(t *testing.T) {
 	}
 	if eq(c.bucketOf("192.168.8.53"), c.bucketOf("2001:db8::1")) {
 		t.Fatal("v4 and v6 buckets must not collide")
+	}
+}
+
+func TestEpochBumpInvalidatesCache(t *testing.T) {
+	calls := 0
+	c := New()
+	c.minpttl = 0
+	c.Next = plugin.HandlerFunc(func(_ context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
+		calls++
+		m := new(dns.Msg)
+		m.SetReply(r)
+		m.Authoritative = true
+		m.Answer = []dns.RR{test.A("pg.db.example. 300 IN A 192.0.2.10")}
+		return dns.RcodeSuccess, w.WriteMsg(m)
+	})
+
+	if got := answerOf(t, serveFrom(t, c, "192.168.8.7", "pg.db.example.")); got != "192.0.2.10" {
+		t.Fatalf("prime: got %q", got)
+	}
+	before := calls
+	if got := answerOf(t, serveFrom(t, c, "192.168.8.7", "pg.db.example.")); got != "192.0.2.10" {
+		t.Fatalf("cached: got %q", got)
+	}
+	if calls != before {
+		t.Fatal("same client should hit the cache before a zone mutation")
+	}
+
+	cachegen.Bump()
+	if got := answerOf(t, serveFrom(t, c, "192.168.8.7", "pg.db.example.")); got != "192.0.2.10" {
+		t.Fatalf("after bump: got %q", got)
+	}
+	if calls != before+1 {
+		t.Fatalf("epoch bump must miss the cache, upstream calls %d -> %d", before, calls)
 	}
 }

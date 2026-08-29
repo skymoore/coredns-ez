@@ -89,3 +89,50 @@ func TestLiveLikeViewOnlyApexSOAFromLAN(t *testing.T) {
 		t.Fatalf("SOA answer empty: rcode=%v ns=%v", rw.msg.Rcode, rw.msg.Ns)
 	}
 }
+
+// Live ns1 layout: public `*.rwx.dev` catch-all, internal `*.rwx.dev` catch-all,
+// and a more-specific internal A with no public exact. Overlay used to ignore
+// view wildcards (HasRRset is exact-only), so LAN clients got the public
+// wildcard for pg.db.rwx.dev even when the internal exact existed — and a
+// public exact must still beat the internal catch-all.
+func TestMostSpecificRecordWinsAcrossViews(t *testing.T) {
+	a := setupLiveLikeNS1(t)
+	token := loginToken(t, a)
+
+	postJSON := func(path string, body any) {
+		t.Helper()
+		b, _ := json.Marshal(body)
+		r := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(b))
+		r.Header.Set("Authorization", "Bearer "+token)
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		a.mux.ServeHTTP(w, r)
+		if w.Code != http.StatusOK && w.Code != http.StatusCreated {
+			t.Fatalf("POST %s: %d %s", path, w.Code, w.Body.Bytes())
+		}
+	}
+
+	postJSON("/api/v1/zones/rwx.dev./records", recordJSON{Name: "*", Type: "A", TTL: 3600, Rdata: "149.90.131.89"})
+	postJSON("/api/v1/zones/rwx.dev./records", recordJSON{Name: "mail", Type: "A", TTL: 3600, Rdata: "192.0.2.25"})
+	postJSON("/api/v1/zones/rwx.dev./records", recordJSON{Name: "*", Type: "A", TTL: 3600, Rdata: "192.168.8.99", ACL: "internal"})
+	postJSON("/api/v1/zones/rwx.dev./records", recordJSON{Name: "pg.db", Type: "A", TTL: 3600, Rdata: "192.168.8.90", ACL: "internal"})
+
+	if got := lookupA(t, a, "pg.db.rwx.dev.", "192.168.8.7"); got != "192.168.8.90" {
+		t.Fatalf("LAN exact internal: got %q want 192.168.8.90", got)
+	}
+	if got := lookupA(t, a, "pg.db.rwx.dev.", "8.8.8.8"); got != "149.90.131.89" {
+		t.Fatalf("public client pg.db: got %q want public wildcard 149.90.131.89", got)
+	}
+	if got := lookupA(t, a, "random.rwx.dev.", "192.168.8.7"); got != "192.168.8.99" {
+		t.Fatalf("LAN catch-all: got %q want internal wildcard 192.168.8.99", got)
+	}
+	if got := lookupA(t, a, "random.rwx.dev.", "8.8.8.8"); got != "149.90.131.89" {
+		t.Fatalf("public catch-all: got %q want public wildcard 149.90.131.89", got)
+	}
+	if got := lookupA(t, a, "mail.rwx.dev.", "192.168.8.7"); got != "192.0.2.25" {
+		t.Fatalf("LAN public exact must beat internal wildcard: got %q want 192.0.2.25", got)
+	}
+	if got := lookupA(t, a, "ns1.rwx.dev.", "192.168.8.7"); got != "192.168.8.53" {
+		t.Fatalf("LAN ns1 exact: got %q want 192.168.8.53", got)
+	}
+}

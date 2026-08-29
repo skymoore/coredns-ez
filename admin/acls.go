@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/skymoore/coredns-ez/admin/store"
+	"github.com/skymoore/coredns-ez/internal/cachegen"
 )
 
 func (a *Admin) handleListACLs(w http.ResponseWriter, _ *http.Request) {
@@ -33,6 +34,7 @@ func (a *Admin) handleCreateACL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, _ = a.db.BumpGeneration()
+	cachegen.Bump()
 	go a.pushSnapshot()
 	a.db.Audit(actorFrom(r).Username, "acl.create", "", acl.Name)
 	writeJSON(w, http.StatusCreated, acl)
@@ -62,6 +64,7 @@ func (a *Admin) handlePatchACL(w http.ResponseWriter, r *http.Request) {
 		a.renameViews(name, acl.Name)
 	}
 	_, _ = a.db.BumpGeneration()
+	cachegen.Bump()
 	go a.pushSnapshot()
 	a.db.Audit(actorFrom(r).Username, "acl.update", "", acl.Name)
 	writeJSON(w, http.StatusOK, acl)
@@ -104,6 +107,7 @@ func (a *Admin) handleDeleteACL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, _ = a.db.BumpGeneration()
+	cachegen.Bump()
 	go a.pushSnapshot()
 	w.WriteHeader(http.StatusNoContent)
 }

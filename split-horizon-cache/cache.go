@@ -13,6 +13,7 @@ import (
 	"github.com/coredns/coredns/plugin/pkg/dnsutil"
 	"github.com/coredns/coredns/plugin/pkg/response"
 	"github.com/coredns/coredns/request"
+	"github.com/skymoore/coredns-ez/internal/cachegen"
 
 	"github.com/miekg/dns"
 )
@@ -338,6 +339,9 @@ func hash(qname string, qtype, qclass uint16, do, cd bool, src []byte) uint64 {
 	if len(src) > 0 {
 		h.Write(src)
 	}
+	var epochBytes [8]byte
+	binary.BigEndian.PutUint64(epochBytes[:], cachegen.Get())
+	h.Write(epochBytes[:])
 	return h.Sum64()
 }
 
