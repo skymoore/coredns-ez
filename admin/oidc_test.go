@@ -25,6 +25,35 @@ func TestOIDCProvisionRole(t *testing.T) {
 	}
 }
 
+func TestReloadOIDCRetriesCorefileConfig(t *testing.T) {
+	var issuer string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/.well-known/openid-configuration" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"issuer":"` + issuer + `","authorization_endpoint":"` + issuer + `/auth","token_endpoint":"` + issuer + `/token","jwks_uri":"` + issuer + `/keys"}`))
+	}))
+	t.Cleanup(srv.Close)
+	issuer = srv.URL
+
+	a := testAdmin(t)
+	a.cfg.OIDC = &oidcSettings{
+		Issuer:       issuer,
+		ClientID:     "coredns",
+		ClientSecret: "secret",
+		RedirectURL:  srv.URL + "/callback",
+	}
+	if a.oidc != nil {
+		t.Fatal("expected nil runtime before reload")
+	}
+	a.reloadOIDCFromDB()
+	if a.oidc == nil {
+		t.Fatal("corefile oidc must retry discovery after a failed boot fetch")
+	}
+}
+
 func TestWantsJSON(t *testing.T) {
 	browser := httptest.NewRequest(http.MethodGet, "/", nil)
 	browser.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")

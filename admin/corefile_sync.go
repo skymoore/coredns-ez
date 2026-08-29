@@ -112,6 +112,14 @@ const (
 	clusterEnd   = "# coredns-ez-cluster-end"
 )
 
+// Former repo name. Secondaries that joined before the rename still have
+// these markers; leaving them in place redeclares the (common) snippet and
+// CoreDNS refuses to parse (import common / errors used twice).
+var clusterSections = [][2]string{
+	{clusterBegin, clusterEnd},
+	{"# coredns-plugins-cluster-begin", "# coredns-plugins-cluster-end"},
+}
+
 func isListenerHeader(header string) bool {
 	h := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(header), "{"))
 	if h == "." || h == ".:53" {
@@ -162,14 +170,18 @@ func clusteredBlocks(adapted string) string {
 
 func stripClusterSection(local string) string {
 	s := local
-	for {
-		start := strings.Index(s, clusterBegin)
-		end := strings.Index(s, clusterEnd)
-		if start < 0 || end < 0 || end < start {
-			return strings.TrimRight(s, "\n") + "\n"
+	for _, pair := range clusterSections {
+		begin, end := pair[0], pair[1]
+		for {
+			start := strings.Index(s, begin)
+			stop := strings.Index(s, end)
+			if start < 0 || stop < 0 || stop < start {
+				break
+			}
+			s = s[:start] + s[stop+len(end):]
 		}
-		s = s[:start] + s[end+len(clusterEnd):]
 	}
+	return strings.TrimRight(s, "\n") + "\n"
 }
 
 func injectQstat(text string) (string, bool) {

@@ -20,21 +20,22 @@ const (
 	RoleOperator = "operator"
 	RoleViewer   = "viewer"
 
-	MetaNodeID       = "node_id"
-	MetaRole         = "role"
-	MetaClusterID    = "cluster_id"
-	MetaJWTHMAC      = "jwt_hmac"
-	MetaAdvertise    = "advertise_dns"
-	MetaPrimaryURL   = "primary_url"
-	MetaMemberSec    = "member_secret"
-	MetaMemberID     = "member_id"
-	MetaGeneration   = "snapshot_generation"
-	MetaTransferTo   = "transfer_to"
-	MetaRecursion    = "recursion_nets"
-	MetaPassword     = "password"
-	MetaCorefileHash = "corefile_hash"
-	MetaNodeName     = "node_name"
-	MetaPrimaryDNS   = "primary_dns"
+	MetaNodeID        = "node_id"
+	MetaRole          = "role"
+	MetaClusterID     = "cluster_id"
+	MetaJWTHMAC       = "jwt_hmac"
+	MetaAdvertise     = "advertise_dns"
+	MetaPrimaryURL    = "primary_url"
+	MetaMemberSec     = "member_secret"
+	MetaMemberID      = "member_id"
+	MetaGeneration    = "snapshot_generation"
+	MetaTransferTo    = "transfer_to"
+	MetaRecursion     = "recursion_nets"
+	MetaPassword      = "password"
+	MetaCorefileHash  = "corefile_hash"
+	MetaNodeName      = "node_name"
+	MetaPrimaryDNS    = "primary_dns"
+	MetaSchemaVersion = "schema_version"
 
 	MemberPrimary   = "primary"
 	MemberSecondary = "secondary"
@@ -84,9 +85,11 @@ func Open(path string) (*Store, error) {
 		_ = sqlDB.Close()
 		return nil, err
 	}
-	if err := gdb.AutoMigrate(schemaModels()...); err != nil {
-		_ = sqlDB.Close()
-		return nil, err
+	if !s.schemaCurrent() {
+		if err := gdb.AutoMigrate(schemaModels()...); err != nil {
+			_ = sqlDB.Close()
+			return nil, err
+		}
 	}
 	if _, err := sqlDB.Exec(`PRAGMA foreign_keys = ON`); err != nil {
 		_ = sqlDB.Close()
@@ -96,7 +99,17 @@ func Open(path string) (*Store, error) {
 		_ = sqlDB.Close()
 		return nil, err
 	}
+	if err := s.SetMeta(MetaSchemaVersion, SchemaVersion); err != nil {
+		_ = sqlDB.Close()
+		return nil, err
+	}
 	return s, nil
+}
+
+func (s *Store) schemaCurrent() bool {
+	var v string
+	err := s.db.QueryRow(`SELECT v FROM meta WHERE k = ?`, MetaSchemaVersion).Scan(&v)
+	return err == nil && v == SchemaVersion
 }
 
 // Gorm returns the GORM handle. Schema lives in the models passed to AutoMigrate.

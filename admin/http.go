@@ -19,13 +19,13 @@ func (a *Admin) routes() http.Handler {
 	if len(a.cfg.CORS) > 0 {
 		r.Use(a.corsMW)
 	}
-	r.Use(newLimiterStore(rate.Limit(100), 200).middleware)
+	r.Use(newLimiterStore(rate.Limit(100), 200, a.cfg.TrustProxy).middleware)
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/", a.handleIndex)
 		r.Get("/health", a.handleHealth)
 		r.Get("/auth/config", a.handleAuthConfig)
-		r.With(newLimiterStore(rate.Limit(10), 20).middleware).Post("/auth/login", a.handleLogin)
+		r.With(newLimiterStore(rate.Limit(10), 20, a.cfg.TrustProxy).middleware).Post("/auth/login", a.handleLogin)
 		r.Get("/auth/oidc/login", a.handleOIDCLogin)
 		r.Get("/auth/oidc/callback", a.handleOIDCCallback)
 		r.Post("/cluster/join", a.handleClusterJoin)
@@ -127,16 +127,30 @@ func (a *Admin) metricsMW(next http.Handler) http.Handler {
 
 func (a *Admin) corsMW(next http.Handler) http.Handler {
 	allowed := map[string]bool{}
+	wildcard := false
 	for _, o := range a.cfg.CORS {
+		if o == "*" {
+			wildcard = true
+			continue
+		}
 		allowed[o] = true
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		if allowed[origin] || allowed["*"] {
-			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Credentials", "true")
+		w.Header().Add("Vary", "Origin")
+		if origin != "" {
+			switch {
+			case allowed[origin]:
+				// Exact match: echo the origin so credentialed requests work
+				// (a literal * is not spec-compliant with credentials).
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Credentials", "true")
+			case wildcard:
+				// Loose-public mode: anonymous GETs only, no credentials.
+				w.Header().Set("Access-Control-Allow-Origin", "*")
+			}
 		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+
+	"github.com/go-chi/chi/v5/middleware"
 )
 
 // maxJSONBody bounds decoded request bodies. Sized for bulk record/import
@@ -23,6 +25,14 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, errorBody{Error: msg})
+}
+
+// internalError logs the full error with request-id correlation and writes a
+// constant copy, so gorm/sqlite detail never reaches callers.
+func internalError(w http.ResponseWriter, r *http.Request, err error) {
+	rid, _ := r.Context().Value(middleware.RequestIDKey).(string)
+	log.Errorf("%s %s rid=%s: %v", r.Method, r.URL.Path, rid, err)
+	writeError(w, http.StatusInternalServerError, "internal error")
 }
 
 func readJSON(r *http.Request, dst any) error {

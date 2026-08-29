@@ -45,6 +45,7 @@ type coreConfig struct {
 	JoinToken      string
 	PrimaryDNS     string
 	CORS           []string
+	TrustProxy     bool
 	OIDC           *oidcSettings
 	Password       bool
 	passwordSet    bool

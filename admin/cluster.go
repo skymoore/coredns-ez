@@ -64,7 +64,7 @@ func (a *Admin) handleCreateJoinToken(w http.ResponseWriter, r *http.Request) {
 	}
 	jt, err := a.db.InsertJoinToken(hash, ttl)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		internalError(w, r, err)
 		return
 	}
 	adv, _ := a.db.Meta(store.MetaAdvertise)
@@ -182,7 +182,7 @@ func (a *Admin) handleClusterConnect(w http.ResponseWriter, r *http.Request) {
 	snap, err := a.acceptJoin(body.URL, body.Token, name, dnsAddr, apiURL, primaryDNS)
 	if err != nil {
 		log.Warningf("cluster connect to %s: %v", body.URL, err)
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeError(w, http.StatusBadGateway, "primary unreachable")
 		return
 	}
 	a.cfg.Role = roleSecondary
@@ -237,7 +237,7 @@ func (a *Admin) handleClusterJoin(w http.ResponseWriter, r *http.Request) {
 	m := store.Member{Name: body.Name, APIURL: body.APIURL, DNSAddr: body.DNSAddr, SecretHash: hash, Role: store.MemberSecondary}
 	inserted, err := a.db.InsertMember(m)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		internalError(w, r, err)
 		return
 	}
 	a.appendTransferAddr(body.DNSAddr)
@@ -254,7 +254,7 @@ func (a *Admin) handleClusterJoin(w http.ResponseWriter, r *http.Request) {
 	}
 	snap, err := a.fullSnapshot()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		internalError(w, r, err)
 		return
 	}
 	adv, _ := a.db.Meta(store.MetaAdvertise)

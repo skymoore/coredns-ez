@@ -372,6 +372,8 @@ func parseAdmin(c *caddy.Controller) (coreConfig, bool, error) {
 			cfg.PrimaryDNS = hp
 		case "cors":
 			cfg.CORS = c.RemainingArgs()
+		case "trust_proxy":
+			cfg.TrustProxy = true
 		case "password":
 			if !c.NextArg() {
 				return cfg, false, c.ArgErr()

@@ -65,7 +65,7 @@ func (a *Admin) parseJWT(raw string) (Actor, error) {
 	if u.Disabled {
 		return Actor{}, errUnauthorized
 	}
-	return Actor{ID: u.ID, Username: u.Username, Role: c.Role, Kind: c.Kind}, nil
+	return Actor{ID: u.ID, Username: u.Username, Role: u.Role, Kind: c.Kind}, nil
 }
 
 // cookieSecure marks the session cookie Secure on direct TLS connections and
@@ -105,8 +105,34 @@ func (a *Admin) authenticate(r *http.Request) (Actor, error) {
 	return a.parseJWT(raw)
 }
 
+// cookieMutationNeedsHeader reports whether a mutating request authenticated
+// via the session cookie must carry a non-simple header (X-Requested-With or
+// Content-Type: application/json). Cross-site form posts cannot set custom
+// headers, so requiring one is the CSRF guard for cookie-auth mutations;
+// bearer/API-token callers are unaffected.
+func cookieMutationNeedsHeader(r *http.Request) bool {
+	switch r.Method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return false
+	}
+	if h := r.Header.Get("Authorization"); strings.HasPrefix(strings.ToLower(h), "bearer ") {
+		return false
+	}
+	if _, err := r.Cookie(sessionCookie); err != nil {
+		return false
+	}
+	if r.Header.Get("X-Requested-With") != "" {
+		return false
+	}
+	return !strings.HasPrefix(strings.ToLower(r.Header.Get("Content-Type")), "application/json")
+}
+
 func (a *Admin) authRequired(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if cookieMutationNeedsHeader(r) {
+			writeError(w, http.StatusBadRequest, "cookie mutations require X-Requested-With or application/json")
+			return
+		}
 		actor, err := a.authenticate(r)
 		if err != nil {
 			authCount.WithLabelValues("unauth").Inc()

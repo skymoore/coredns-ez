@@ -179,3 +179,43 @@ func TestApplyCorefileStripsClusterSection(t *testing.T) {
 		t.Fatalf("second strip reload=%v err=%v", reload, err)
 	}
 }
+
+func TestApplyCorefileStripsLegacyRepoClusterSection(t *testing.T) {
+	a := testAdmin(t)
+	conf := filepath.Join(a.cfg.Data, "Corefile")
+	origArgs := os.Args
+	os.Args = []string{"coredns", "-conf", conf}
+	t.Cleanup(func() { os.Args = origArgs })
+
+	local := `(common) {
+	bind 192.168.8.54
+	errors
+}
+
+. {
+	admin
+	import common
+}
+
+# coredns-plugins-cluster-begin
+(common) {
+	bind 192.168.8.54
+	errors
+}
+# coredns-plugins-cluster-end
+`
+	if err := os.WriteFile(conf, []byte(local), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	reload, err := a.applyCorefile(store.Snapshot{})
+	if err != nil || !reload {
+		t.Fatalf("reload=%v err=%v", reload, err)
+	}
+	got, err := os.ReadFile(conf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(got), "coredns-plugins-cluster") || strings.Count(string(got), "(common)") != 1 {
+		t.Fatalf("legacy cluster leftovers still present:\n%s", got)
+	}
+}

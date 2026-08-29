@@ -19,7 +19,14 @@ type oidcRuntime struct {
 	verifier *oidc.IDTokenVerifier
 }
 
+const oidcDiscoverTimeout = 8 * time.Second
+
 func newOIDC(ctx context.Context, c oidcSettings) (*oidcRuntime, error) {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, oidcDiscoverTimeout)
+		defer cancel()
+	}
 	p, err := oidc.NewProvider(ctx, c.Issuer)
 	if err != nil {
 		return nil, err
@@ -78,17 +85,21 @@ func (a *Admin) oauthForRequest(r *http.Request) oauth2.Config {
 }
 
 func (a *Admin) reloadOIDCFromDB() {
-	if a.cfg.OIDC != nil {
+	if a.oidc != nil {
 		return
 	}
-	oc, err := a.db.GetOIDC()
-	if err != nil {
-		return
+	c := a.cfg.OIDC
+	if c == nil {
+		oc, err := a.db.GetOIDC()
+		if err != nil {
+			return
+		}
+		c = &oidcSettings{
+			Issuer: oc.Issuer, ClientID: oc.ClientID, ClientSecret: oc.ClientSecret,
+			RedirectURL: oc.RedirectURL, ButtonText: oc.ButtonText, ButtonImage: oc.ButtonImage,
+		}
 	}
-	rt, err := newOIDC(context.Background(), oidcSettings{
-		Issuer: oc.Issuer, ClientID: oc.ClientID, ClientSecret: oc.ClientSecret,
-		RedirectURL: oc.RedirectURL, ButtonText: oc.ButtonText, ButtonImage: oc.ButtonImage,
-	})
+	rt, err := newOIDC(context.Background(), *c)
 	if err != nil {
 		log.Warningf("oidc reload: %v", err)
 		return

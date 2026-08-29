@@ -23,14 +23,16 @@ type limiterStore struct {
 	entries map[string]*limiterEntry
 	limit   rate.Limit
 	burst   int
+	trust   bool
 	cleaned time.Time
 }
 
-func newLimiterStore(limit rate.Limit, burst int) *limiterStore {
+func newLimiterStore(limit rate.Limit, burst int, trustProxy bool) *limiterStore {
 	return &limiterStore{
 		entries: map[string]*limiterEntry{},
 		limit:   limit,
 		burst:   burst,
+		trust:   trustProxy,
 		cleaned: time.Now(),
 	}
 }
@@ -64,7 +66,7 @@ func (s *limiterStore) allow(key string) bool {
 
 func (s *limiterStore) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !s.allow(clientIP(r)) {
+		if !s.allow(clientIP(r, s.trust)) {
 			writeError(w, http.StatusTooManyRequests, "rate limit exceeded")
 			return
 		}
@@ -72,19 +74,25 @@ func (s *limiterStore) middleware(next http.Handler) http.Handler {
 	})
 }
 
-// clientIP keys buckets on the originating client. Behind the TLS-terminating
-// proxy the real client sits in X-Forwarded-For, so its first hop wins; the
-// RemoteAddr host is the fallback for direct connections.
-func clientIP(r *http.Request) string {
-	if xf := r.Header.Get("X-Forwarded-For"); xf != "" {
-		if i := strings.IndexByte(xf, ','); i > 0 {
-			xf = xf[:i]
-		}
-		return strings.TrimSpace(xf)
-	}
+// clientIP keys buckets on the originating client. X-Forwarded-For is only
+// honoured when the immediate peer is itself a trusted hop: a loopback or
+// private proxy on the same host, or any peer once trust_proxy is configured.
+// Otherwise the header is attacker-controlled (rotate it and every request
+// gets a fresh bucket), so the RemoteAddr host stays authoritative.
+func clientIP(r *http.Request, trustProxy bool) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		host = r.RemoteAddr
 	}
-	return host
+	xf := r.Header.Get("X-Forwarded-For")
+	if xf == "" {
+		return host
+	}
+	if ip := net.ParseIP(host); !trustProxy && (ip == nil || !(ip.IsLoopback() || ip.IsPrivate())) {
+		return host
+	}
+	if i := strings.IndexByte(xf, ','); i > 0 {
+		xf = xf[:i]
+	}
+	return strings.TrimSpace(xf)
 }

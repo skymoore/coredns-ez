@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/skymoore/coredns-ez/admin/store"
 	dnsupdatepersist "github.com/skymoore/coredns-ez/dns-update-persistent"
@@ -604,5 +605,97 @@ func TestLoginCookieSecureHonorsForwardedProto(t *testing.T) {
 	a.mux.ServeHTTP(w, r)
 	if strings.Contains(w.Header().Get("Set-Cookie"), "Secure") {
 		t.Fatalf("plain http must omit Secure: %q", w.Header().Get("Set-Cookie"))
+	}
+}
+
+func TestParseJWTUsesLiveDBRole(t *testing.T) {
+	a := testAdmin(t)
+	u, err := a.db.GetUserByName("admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, _, err := a.issueJWT(Actor{ID: u.ID, Username: u.Username, Role: store.RoleAdmin, Kind: "user"}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.Role = store.RoleViewer
+	if err := a.db.UpdateUser(u); err != nil {
+		t.Fatal(err)
+	}
+	actor, err := a.parseJWT(tok)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actor.Role != store.RoleViewer {
+		t.Fatalf("demoted user must carry live role: %s", actor.Role)
+	}
+}
+
+func TestCookieMutationRequiresHeader(t *testing.T) {
+	a := testAdmin(t)
+	u, err := a.db.GetUserByName("admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, _, err := a.issueJWT(Actor{ID: u.ID, Username: u.Username, Role: u.Role, Kind: "user"}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := a.authRequired(okHandler())
+	post := func(headers map[string]string) int {
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/x", nil)
+		r.AddCookie(&http.Cookie{Name: sessionCookie, Value: tok})
+		for k, v := range headers {
+			r.Header.Set(k, v)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w.Code
+	}
+	if code := post(nil); code != http.StatusBadRequest {
+		t.Fatalf("cookie post without header: %d", code)
+	}
+	if code := post(map[string]string{"X-Requested-With": "XMLHttpRequest"}); code != http.StatusOK {
+		t.Fatalf("cookie post with x-requested-with: %d", code)
+	}
+	if code := post(map[string]string{"Content-Type": "application/json"}); code != http.StatusOK {
+		t.Fatalf("cookie post with json content-type: %d", code)
+	}
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/x", nil)
+	r.AddCookie(&http.Cookie{Name: sessionCookie, Value: tok})
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("cookie get without header: %d", w.Code)
+	}
+}
+
+func TestCORSWildcardSplitsFromCredentialedEcho(t *testing.T) {
+	a := &Admin{cfg: coreConfig{CORS: []string{"https://app.test", "*"}}}
+	h := a.corsMW(okHandler())
+
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.Header.Set("Origin", "https://app.test")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "https://app.test" {
+		t.Fatalf("exact origin echo: %q", got)
+	}
+	if w.Header().Get("Access-Control-Allow-Credentials") != "true" {
+		t.Fatal("exact origin must allow credentials")
+	}
+	if got := w.Header().Get("Vary"); got != "Origin" {
+		t.Fatalf("vary: %q", got)
+	}
+
+	r = httptest.NewRequest(http.MethodGet, "/", nil)
+	r.Header.Set("Origin", "https://other.test")
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Fatalf("wildcard origin: %q", got)
+	}
+	if got := w.Header().Get("Access-Control-Allow-Credentials"); got != "" {
+		t.Fatalf("wildcard must not send credentials: %q", got)
 	}
 }

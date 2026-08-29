@@ -245,19 +245,20 @@ func installRelease(info updateInfo) error {
 	if err != nil {
 		return err
 	}
-	if info.SHAURL != "" {
-		sumb, err := httpGet(info.SHAURL)
-		if err != nil {
-			return fmt.Errorf("checksum: %w", err)
-		}
-		want := strings.Fields(string(sumb))
-		if len(want) == 0 {
-			return fmt.Errorf("empty checksum file")
-		}
-		sum := sha256.Sum256(body)
-		if !strings.EqualFold(hex.EncodeToString(sum[:]), want[0]) {
-			return fmt.Errorf("checksum mismatch")
-		}
+	if info.SHAURL == "" {
+		return fmt.Errorf("release asset has no .sha256 checksum")
+	}
+	sumb, err := httpGet(info.SHAURL)
+	if err != nil {
+		return fmt.Errorf("checksum: %w", err)
+	}
+	want := strings.Fields(string(sumb))
+	if len(want) == 0 {
+		return fmt.Errorf("empty checksum file")
+	}
+	sum := sha256.Sum256(body)
+	if !strings.EqualFold(hex.EncodeToString(sum[:]), want[0]) {
+		return fmt.Errorf("checksum mismatch")
 	}
 	bin, err := extractCoredns(body)
 	if err != nil {

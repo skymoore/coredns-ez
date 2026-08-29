@@ -43,6 +43,7 @@ admin {
     join URL TOKEN
     dns HOST:PORT
     cors ORIGIN...
+    trust_proxy
     password on | off
     oidc {
         issuer URL
@@ -62,6 +63,7 @@ admin {
 * `advertise` is the DNS address secondaries transfer from.
 * `join` is secondary-only, used when the DB has no cluster membership yet.
 * `dns` is the primary’s DNS address on a secondary (`HOST:PORT`).
+* `trust_proxy` trusts `X-Forwarded-For` from any peer when keying rate-limit buckets. Without it the header is only honoured from loopback/private proxy addresses.
 * Put *admin* in both the `https://.:443` block and the `.:53` block so DoH and UDP/TCP share the zone manager.
 
 *cache* on that `:53` block runs **before** *admin*. A cached NODATA/NXDOMAIN

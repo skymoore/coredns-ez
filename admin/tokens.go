@@ -77,7 +77,7 @@ func (a *Admin) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		t.ExpiresAt = &exp
 	}
 	if err := a.db.CreateToken(t); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		internalError(w, r, err)
 		return
 	}
 	created, _ := a.db.GetTokenByHash(hash)

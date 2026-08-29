@@ -7,6 +7,12 @@ import (
 	"github.com/miekg/dns"
 )
 
+// SchemaVersion is stored in meta. Bump it whenever schemaModels or a
+// GORM tag on those structs changes. Open skips AutoMigrate when this
+// matches so a 300k-row filter_rules table is not rebuilt on every start
+// (that rebuild holds :53/:443 closed until it finishes).
+const SchemaVersion = "1"
+
 // schemaModels is every SQLite table. AutoMigrate is the schema source of
 // truth; do not add CREATE TABLE strings alongside these models.
 func schemaModels() []any {

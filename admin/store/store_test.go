@@ -140,6 +140,33 @@ func TestUsersAndSnapshot(t *testing.T) {
 	}
 }
 
+func TestOpenRecordsSchemaVersion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "api.sqlite")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := s.Meta(MetaSchemaVersion)
+	if err != nil || v != SchemaVersion {
+		t.Fatalf("schema version %q %v", v, err)
+	}
+	if !s.schemaCurrent() {
+		t.Fatal("fresh db should skip migrate on next Open")
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s2.Close() })
+	v2, err := s2.Meta(MetaSchemaVersion)
+	if err != nil || v2 != SchemaVersion || !s2.schemaCurrent() {
+		t.Fatalf("reopen schema version %q %v current=%v", v2, err, s2.schemaCurrent())
+	}
+}
+
 func TestAPITokensSurviveReopen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "api.sqlite")
 	s, err := Open(path)
